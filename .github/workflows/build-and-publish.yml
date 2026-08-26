@@ -1,0 +1,377 @@
+# Ankra reads three scan artifacts back from this workflow's runs. The names
+# are matched exactly, not by prefix, and Ankra's workflow validator refuses a
+# workflow that uploads them under any other name:
+#
+#   ankra-semgrep-scan   Semgrep JSON, the object carrying results[]
+#   ankra-checkov-scan   Checkov JSON, one report or a list of framework reports
+#   ankra-security-scan  Trivy JSON, the object carrying Results[]
+#
+# Each artifact must hold exactly ONE JSON document: only the first .json
+# member of the newest artifact with that name is read, so merging several
+# component reports into one artifact hides all but the first. Keep both rules
+# if you fold these scans into a pipeline of your own.
+name: Build and Publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: registry.ankra.cloud
+  IMAGE_NAME: org-ff91b1e8-3f9c-4699-aeea-b45bf4d00dd4/cli
+  # ANKRA_IMAGE_GATE decides which image findings BLOCK the publish. Every
+  # finding is reported either way - in this run's ankra-security-scan artifact,
+  # in the step summary below the build, and on the application's Security tab
+  # in Ankra.
+  #
+  #   app  (default) block on fixable CRITICAL/HIGH findings in packages this
+  #        repository's own dependency manifests declare. What the base image
+  #        carries is reported without blocking - its OS packages, the language
+  #        runtime its toolchain compiled in such as Go's "stdlib", the
+  #        dependency tree its own package manager ships such as everything
+  #        under /usr/local/lib/node_modules/npm in a node image, and the tree
+  #        that package manager vendors inside itself such as the copies pip
+  #        carries under site-packages/pip/_vendor in a python image. Those
+  #        follow the base image's rebuild cadence, not anything this
+  #        repository declares, and no dependency pin here can move them.
+  #   all  also block on what the base image carries.
+  #   off  block on nothing. The scan still runs and still reports.
+  #
+  # A missing or unreadable scan report fails this workflow whatever this is set
+  # to. No verdict is not a clean verdict.
+  ANKRA_IMAGE_GATE: app
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          pip install semgrep
+          semgrep scan --config "p/default" --config "p/docker" --config "p/github-actions" --config "p/golang" --json --output semgrep-results.json
+
+      - name: Upload Semgrep results
+        uses: actions/upload-artifact@v4
+        if: always() && hashFiles('semgrep-results.json') != ''
+        with:
+          name: ankra-semgrep-scan
+          path: semgrep-results.json
+          retention-days: 90
+
+      - name: Check Semgrep findings
+        if: always() && hashFiles('semgrep-results.json') != ''
+        run: |
+          errors=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json)
+          warnings=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' semgrep-results.json)
+          {
+            echo "### Semgrep"
+            echo ""
+            echo "| Severity | Findings |"
+            echo "| --- | --- |"
+            echo "| ERROR | $errors |"
+            echo "| WARNING | $warnings |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$errors" -gt 0 ]; then
+            jq -r '.results[] | select(.extra.severity == "ERROR") | "::error file=\(.path),line=\(.start.line)::\(.check_id): \(.extra.message)"' semgrep-results.json
+            echo "Semgrep found $errors ERROR-severity finding(s). Fix them, or lower the gate in this workflow if you accept the risk."
+            exit 1
+          fi
+
+      - name: Run Checkov IaC scan
+        id: ankra_checkov_scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          output_format: json
+          output_file_path: checkov-results
+          soft_fail: true
+          framework: dockerfile,helm,github_actions
+
+      - name: Upload Checkov results
+        uses: actions/upload-artifact@v4
+        if: always() && hashFiles('checkov-results/results_json.json') != ''
+        with:
+          name: ankra-checkov-scan
+          path: checkov-results/results_json.json
+          retention-days: 90
+
+      - name: Check Checkov findings
+        if: always() && steps.ankra_checkov_scan.outcome != 'skipped'
+        run: |
+          report=checkov-results/results_json.json
+          if [ ! -f "$report" ]; then
+            {
+              echo "### Checkov"
+              echo ""
+              echo "UNKNOWN - the scan wrote no report to $report, so no verdict was read. This is not a clean scan."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Checkov wrote no JSON report to $report, so the IaC scan result is UNKNOWN, not zero findings."
+            exit 1
+          fi
+          if ! failed=$(jq '[.. | objects | select(has("results")) | .results.failed_checks // []] | flatten | length' "$report"); then
+            {
+              echo "### Checkov"
+              echo ""
+              echo "UNKNOWN - $report could not be parsed, so no verdict was read. This is not a clean scan."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::could not parse the Checkov report at $report, so the IaC scan result is UNKNOWN, not zero findings."
+            exit 1
+          fi
+          {
+            echo "### Checkov"
+            echo ""
+            echo "Failed checks: $failed"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" -gt 0 ]; then
+            echo "Checkov reported $failed failed check(s); see the ankra-checkov-scan artifact."
+          fi
+
+      - name: Check Checkov chart coverage
+        if: always() && hashFiles('checkov-results/results_json.json') != ''
+        run: |
+          if [ -z "$(find . -name Chart.yaml -not -path '*/charts/*' -print -quit)" ]; then
+            exit 0
+          fi
+          if ! command -v helm >/dev/null 2>&1; then
+            {
+              echo "### Checkov chart coverage"
+              echo ""
+              echo "helm is not installed on this runner, so chart rendering was not verified."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          unrendered=""
+          while IFS= read -r chart_file; do
+            chart_directory=$(dirname "$chart_file")
+            helm dependency build "$chart_directory" >/dev/null 2>&1 || true
+            if ! render_error=$(helm template "$chart_directory" 2>&1); then
+              unrendered="$unrendered $chart_directory"
+              echo "::warning file=$chart_file::Checkov could not render this chart, so none of its resources were scanned: $(printf '%s' "$render_error" | tr '\n' ' ' | cut -c 1-300)"
+            fi
+          done < <(find . -name Chart.yaml -not -path '*/charts/*' | sort)
+          {
+            echo "### Checkov chart coverage"
+            echo ""
+            if [ -n "$unrendered" ]; then
+              echo "Checkov could not render these charts, so the IaC scan did not cover them:"
+              for chart_directory in $unrendered; do
+                echo "- $chart_directory"
+              done
+              echo ""
+              echo "A chart that fails to render reports zero findings, which reads as clean. Give every value the chart requires a default in values.yaml so it renders unattended."
+            else
+              echo "Every Helm chart rendered, so Checkov scanned them."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the image registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.ankra.cloud
+          username: ${{ secrets.ANKRA_REGISTRY_USERNAME }}
+          password: ${{ secrets.ANKRA_REGISTRY_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: registry.ankra.cloud/org-ff91b1e8-3f9c-4699-aeea-b45bf4d00dd4/cli
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+
+      - name: Get short SHA
+        id: vars
+        run: echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Build image for scanning
+        id: ankra_scan_build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ankra-scan-target:${{ github.run_id }}-${{ github.run_attempt }}-sha-${{ steps.vars.outputs.short_sha }}
+          build-args: |
+            VERSION=${{ vars.VERSION || secrets.VERSION }}
+            COMMIT=${{ vars.COMMIT || secrets.COMMIT }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        id: ankra_trivy_scan
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: ankra-scan-target:${{ github.run_id }}-${{ github.run_attempt }}-sha-${{ steps.vars.outputs.short_sha }}
+          format: json
+          output: trivy-results.json
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+
+      - name: Upload Trivy scan results
+        uses: actions/upload-artifact@v4
+        if: always() && hashFiles('trivy-results.json') != ''
+        with:
+          name: ankra-security-scan
+          path: trivy-results.json
+          retention-days: 90
+
+      - name: Check Trivy findings
+        if: always() && steps.ankra_trivy_scan.outcome != 'skipped'
+        shell: bash
+        run: |
+          report=trivy-results.json
+          if [ ! -f "$report" ] && [ -n "$GITHUB_WORKSPACE" ] && [ -f "$GITHUB_WORKSPACE/$report" ]; then
+            report="$GITHUB_WORKSPACE/$report"
+          fi
+          gate="${ANKRA_IMAGE_GATE:-app}"
+          case "$gate" in
+            app|all|off) ;;
+            *)
+              echo "::error::ANKRA_IMAGE_GATE is set to '$gate'. The accepted values are app, all and off."
+              exit 1
+              ;;
+          esac
+          if [ ! -f "$report" ]; then
+            {
+              echo "### Trivy"
+              echo ""
+              echo "UNKNOWN - the scan wrote no report to $report, so no verdict was read. This is not a clean scan."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Trivy wrote no JSON report to $report, so the image scan result is UNKNOWN, not zero vulnerabilities."
+            exit 1
+          fi
+          if ! jq -e 'type == "object" and (.Results == null or (.Results | type) == "array")' "$report" > /dev/null 2>&1; then
+            {
+              echo "### Trivy"
+              echo ""
+              echo "UNKNOWN - $report did not parse, or is not shaped like a Trivy report, so no verdict was read. This is not a clean scan."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::the Trivy report at $report did not parse or is not a Trivy report object with a Results list, so the image scan result is UNKNOWN, not zero vulnerabilities."
+            exit 1
+          fi
+          if ! counts=$(jq -r '([.Results[]?.Packages[]? | select(((.AnalyzedBy // "") == "python-pkg")) | (((.Name // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.Version // ""))] as $installedPackages | [.Results[]? | select((.Class // "") != "os-pkgs") | . as $resultSet | [(.Packages // [])[] | select((((.AnalyzedBy // "") == "sbom") and ((.Identifier.UID // "") != ""))) | .Identifier.UID] as $vendoredIdentities | .Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select(.FixedVersion != null and .FixedVersion != "") | select((((($resultSet.Type // "") == "gobinary") and ((.PkgName // "") == "stdlib")) or ((($resultSet.Type // "") == "node-pkg") and ((.PkgPath // "") | startswith("usr/local/lib/node_modules/npm/"))) or ((($resultSet.Type // "") == "python-pkg") and (((.PkgIdentifier.UID // "") as $identity | (($identity != "") and (($vendoredIdentities | index($identity)) != null)))) and (((((.PkgName // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.InstalledVersion // "")) as $nameVersion | ($installedPackages | index($nameVersion)) == null)))) | not)] | length), ([.Results[]?.Packages[]? | select(((.AnalyzedBy // "") == "python-pkg")) | (((.Name // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.Version // ""))] as $installedPackages | [.Results[]? | select((.Class // "") != "os-pkgs") | . as $resultSet | [(.Packages // [])[] | select((((.AnalyzedBy // "") == "sbom") and ((.Identifier.UID // "") != ""))) | .Identifier.UID] as $vendoredIdentities | .Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select(.FixedVersion != null and .FixedVersion != "") | select(((($resultSet.Type // "") == "gobinary") and ((.PkgName // "") == "stdlib")) or ((($resultSet.Type // "") == "node-pkg") and ((.PkgPath // "") | startswith("usr/local/lib/node_modules/npm/"))) or ((($resultSet.Type // "") == "python-pkg") and (((.PkgIdentifier.UID // "") as $identity | (($identity != "") and (($vendoredIdentities | index($identity)) != null)))) and (((((.PkgName // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.InstalledVersion // "")) as $nameVersion | ($installedPackages | index($nameVersion)) == null))))] | length), ([.Results[]? | select((.Class // "") == "os-pkgs") | .Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select(.FixedVersion != null and .FixedVersion != "")] | length), ([.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length), ([.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length), ((.Results // []) | length)' "$report"); then
+            {
+              echo "### Trivy"
+              echo ""
+              echo "UNKNOWN - the findings in $report could not be counted, so no verdict was read. This is not a clean scan."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::could not count the findings in the Trivy report at $report, so the image scan result is UNKNOWN, not zero vulnerabilities."
+            exit 1
+          fi
+          app_fixable=$(printf '%s\n' "$counts" | sed -n '1p')
+          toolchain_fixable=$(printf '%s\n' "$counts" | sed -n '2p')
+          os_fixable=$(printf '%s\n' "$counts" | sed -n '3p')
+          critical=$(printf '%s\n' "$counts" | sed -n '4p')
+          high=$(printf '%s\n' "$counts" | sed -n '5p')
+          result_sets=$(printf '%s\n' "$counts" | sed -n '6p')
+          for count in "$app_fixable" "$toolchain_fixable" "$os_fixable" "$critical" "$high" "$result_sets"; do
+            case "$count" in
+              ''|*[!0-9]*)
+                {
+                  echo "### Trivy"
+                  echo ""
+                  echo "UNKNOWN - the counts read from $report are not numbers, so no verdict was read. This is not a clean scan."
+                } >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::the Trivy report at $report yielded a non-numeric finding count, so the image scan result is UNKNOWN, not zero vulnerabilities."
+                exit 1
+                ;;
+            esac
+          done
+          app_level=warning
+          toolchain_level=warning
+          os_level=warning
+          case "$gate" in
+            app) app_level=error ;;
+            all) app_level=error; toolchain_level=error; os_level=error ;;
+          esac
+          blocking=0
+          if [ "$app_level" = "error" ]; then blocking=$((blocking + app_fixable)); fi
+          if [ "$toolchain_level" = "error" ]; then blocking=$((blocking + toolchain_fixable)); fi
+          if [ "$os_level" = "error" ]; then blocking=$((blocking + os_fixable)); fi
+          {
+            echo "### Trivy"
+            echo ""
+            echo "Scanned the linux/amd64 image built from this commit, before it could be published."
+            echo ""
+            echo "| Severity | Findings |"
+            echo "| --- | --- |"
+            echo "| CRITICAL | $critical |"
+            echo "| HIGH | $high |"
+            echo "| Fixable CRITICAL/HIGH in this repository's dependencies | $app_fixable |"
+            echo "| Fixable CRITICAL/HIGH in the toolchain the base image supplied | $toolchain_fixable |"
+            echo "| Fixable CRITICAL/HIGH in base-image OS packages | $os_fixable |"
+            echo ""
+            echo "Gate: ANKRA_IMAGE_GATE=$gate. 'app' blocks on the dependencies row only, 'all' on all three, 'off' on none."
+            echo ""
+            echo "Trivy calls an OS package finding fixable when the distribution has published a fixed version. That is not the same as the fix being present in the base image tag this repository builds on, so an OS finding can be reported as fixable while nothing in this repository can remove it except a newer base image or an OS package upgrade layer in the Dockerfile."
+            echo ""
+            echo "The base-image toolchain row is the same kind of finding reached a different way. It holds the language runtime the builder compiled in - for Go, the 'stdlib' package every binary carries - the dependency tree the base image's own package manager ships, such as everything under /usr/local/lib/node_modules/npm in a node image, and the tree that package manager vendors inside itself, such as the copies pip carries under site-packages/pip/_vendor in a python image and declares in a document Trivy reads. The fixed versions Trivy reports against those are toolchain and tooling releases, not versions any dependency manifest in this repository can pin. They are moved by building on a newer base image, or by a newer package manager inside it, and by nothing else."
+            echo ""
+            echo "Every finding above, blocking or not, is in this run's ankra-security-scan artifact and on the application's Security tab in Ankra."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$result_sets" -eq 0 ]; then
+            {
+              echo ""
+              echo "Trivy returned NO result sets for this image, so the zeroes above are the absence of a report rather than the absence of findings. That is expected for an image with no package database - a scratch or distroless base - and expected for nothing else. If this image installs packages, treat this run as unscanned."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Trivy returned no result sets for this image; the zero counts above are an empty report, not a clean scan."
+          fi
+          if [ "$app_fixable" -gt 0 ]; then
+            jq -r --arg level "$app_level" '[.Results[]?.Packages[]? | select(((.AnalyzedBy // "") == "python-pkg")) | (((.Name // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.Version // ""))] as $installedPackages | .Results[]? | select((.Class // "") != "os-pkgs") | . as $resultSet | [(.Packages // [])[] | select((((.AnalyzedBy // "") == "sbom") and ((.Identifier.UID // "") != ""))) | .Identifier.UID] as $vendoredIdentities | .Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select(.FixedVersion != null and .FixedVersion != "") | select((((($resultSet.Type // "") == "gobinary") and ((.PkgName // "") == "stdlib")) or ((($resultSet.Type // "") == "node-pkg") and ((.PkgPath // "") | startswith("usr/local/lib/node_modules/npm/"))) or ((($resultSet.Type // "") == "python-pkg") and (((.PkgIdentifier.UID // "") as $identity | (($identity != "") and (($vendoredIdentities | index($identity)) != null)))) and (((((.PkgName // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.InstalledVersion // "")) as $nameVersion | ($installedPackages | index($nameVersion)) == null)))) | not) | "::\($level)::\(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> fixed in \(.FixedVersion) (declared by this repository)"' "$report"
+            echo "Trivy found $app_fixable fixable CRITICAL/HIGH vulnerability(ies) in packages this repository's own dependency manifests declare. Update the pinned versions there and push again."
+          fi
+          if [ "$toolchain_fixable" -gt 0 ]; then
+            jq -r --arg level "$toolchain_level" '[.Results[]?.Packages[]? | select(((.AnalyzedBy // "") == "python-pkg")) | (((.Name // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.Version // ""))] as $installedPackages | .Results[]? | select((.Class // "") != "os-pkgs") | . as $resultSet | [(.Packages // [])[] | select((((.AnalyzedBy // "") == "sbom") and ((.Identifier.UID // "") != ""))) | .Identifier.UID] as $vendoredIdentities | .Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select(.FixedVersion != null and .FixedVersion != "") | select(((($resultSet.Type // "") == "gobinary") and ((.PkgName // "") == "stdlib")) or ((($resultSet.Type // "") == "node-pkg") and ((.PkgPath // "") | startswith("usr/local/lib/node_modules/npm/"))) or ((($resultSet.Type // "") == "python-pkg") and (((.PkgIdentifier.UID // "") as $identity | (($identity != "") and (($vendoredIdentities | index($identity)) != null)))) and (((((.PkgName // "") | ascii_downcase | split("_") | join("-") | split(".") | join("-") | split("-") | map(select(. != "")) | join("-")) + "@" + (.InstalledVersion // "")) as $nameVersion | ($installedPackages | index($nameVersion)) == null)))) | "::\($level)::\(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> fixed in \(.FixedVersion) (\((if (($resultSet.Type // "") == "node-pkg") then "bundled with the package manager the base image ships" elif (($resultSet.Type // "") == "python-pkg") then "named by a bill of materials in the image, not installed as a package here" else "language runtime supplied by the base image" end)))"' "$report"
+            if [ "$toolchain_level" = "error" ]; then
+              echo "Trivy found $toolchain_fixable fixable CRITICAL/HIGH vulnerability(ies) in what the base image supplied - the language runtime it compiled in, and the dependency tree its own package manager ships - and ANKRA_IMAGE_GATE is 'all', so they block this publish. The fixed versions listed above are toolchain and tooling releases, not versions any dependency manifest here can pin: move to a newer base image."
+            else
+              echo "Trivy found $toolchain_fixable fixable CRITICAL/HIGH vulnerability(ies) in what the base image supplied rather than in anything this repository declares - for Go the 'stdlib' package every binary carries, for Node the dependency tree npm itself ships under /usr/local/lib/node_modules/npm, for Python the tree pip vendors inside itself under site-packages/pip/_vendor, which is source rather than installed packages and has no dist-info any pin could name. They did NOT block this publish: no dependency manifest in this repository declares them, so there is no pinned version here to update, and editing package.json, go.mod or requirements.txt cannot reach them. Move to a newer base image instead - for Go by raising the 'FROM golang:<version>' builder stage in the Dockerfile to a currently supported Go release, for Node by raising the 'FROM node:<version>' stage to a tag whose bundled npm is newer, for Python by raising the 'FROM python:<version>' stage, or whatever pip version the Dockerfile installs, to a release that vendors newer copies. Set ANKRA_IMAGE_GATE: all in this workflow to block on them too."
+            fi
+          fi
+          if [ "$os_fixable" -gt 0 ]; then
+            jq -r --arg level "$os_level" '.Results[]? | select((.Class // "") == "os-pkgs") | .Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | select(.FixedVersion != null and .FixedVersion != "") | "::\($level)::\(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> fixed in \(.FixedVersion) (base image OS package)"' "$report"
+            if [ "$os_level" = "error" ]; then
+              echo "Trivy found $os_fixable fixable CRITICAL/HIGH vulnerability(ies) in the base image's OS packages, and ANKRA_IMAGE_GATE is 'all', so they block this publish."
+            else
+              echo "Trivy found $os_fixable fixable CRITICAL/HIGH vulnerability(ies) in the base image's OS packages. They did NOT block this publish: they come from the base image's rebuild cadence rather than from anything this repository declares. Fix them by moving to a rebuilt base image tag, or by upgrading the OS packages in the Dockerfile - on Debian 'RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*', on Alpine 'RUN apk --no-cache upgrade'. Set ANKRA_IMAGE_GATE: all in this workflow to block on them too."
+            fi
+          fi
+          if [ "$blocking" -gt 0 ]; then
+            echo "Nothing was published: the push step runs only after this gate passes."
+            exit 1
+          fi
+
+      - name: Build and push Docker image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ vars.VERSION || secrets.VERSION }}
+            COMMIT=${{ vars.COMMIT || secrets.COMMIT }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
