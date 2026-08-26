@@ -1,0 +1,164 @@
+name: Release tael CLI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  create-release:
+    name: Create release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create release and publish the install script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A hyphen in the tag (v1.2.0-rc1) marks a pre-release: it reaches
+          # the releases page but never the Homebrew tap.
+          prerelease_flag=""
+          case "${{ github.ref_name }}" in
+            *-*) prerelease_flag="--prerelease" ;;
+          esac
+          if ! gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release create "${{ github.ref_name }}" \
+              ${prerelease_flag} \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi
+          gh release upload "${{ github.ref_name }}" install.sh --clobber
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: create-release
+    permissions:
+      contents: write
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, goos: linux,   goarch: amd64 }
+          - { os: ubuntu-latest, goos: linux,   goarch: arm64 }
+          - { os: ubuntu-latest, goos: windows, goarch: amd64 }
+          - { os: macos-latest,  goos: darwin,  goarch: amd64 }
+          - { os: macos-latest,  goos: darwin,  goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          output="tael-${GOOS}-${GOARCH}"
+          if [ "${GOOS}" = "windows" ]; then output="${output}.exe"; fi
+          go build -trimpath \
+            -ldflags "-s -w -X tael.io/cli/cmd.version=${{ github.ref_name }} -X tael.io/cli/cmd.commit=${GITHUB_SHA}" \
+            -o "dist/${output}" .
+
+      - name: Ad-hoc sign the macOS binary
+        if: matrix.goos == 'darwin'
+        run: |
+          chmod +x dist/tael-darwin-${{ matrix.goarch }}
+          xattr -d com.apple.quarantine dist/tael-darwin-${{ matrix.goarch }} 2>/dev/null || true
+          # Reduces Gatekeeper friction until Developer ID signing and
+          # notarization are configured.
+          codesign --force --sign - dist/tael-darwin-${{ matrix.goarch }}
+
+      - name: Checksum
+        run: |
+          cd dist
+          binary=$(ls tael-${{ matrix.goos }}-${{ matrix.goarch }}* | head -n 1)
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${binary}" > "${binary}.sha256"
+          else
+            shasum -a 256 "${binary}" > "${binary}.sha256"
+          fi
+          cat "${binary}.sha256"
+
+      - name: Smoke test
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: ./dist/tael-linux-amd64 version
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            dist/tael-${{ matrix.goos }}-${{ matrix.goarch }}* --clobber
+
+  publish-homebrew:
+    name: Publish Homebrew formula
+    needs: build
+    # Pre-release tags never reach the tap; brew users only see stable.
+    if: ${{ !contains(github.ref_name, '-') }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render the formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          fetch_checksum() {
+            curl -fsSL "https://github.com/taelio/cli/releases/download/${TAG}/tael-$1.sha256" | awk '{print $1}'
+          }
+          sha_darwin_arm64="$(fetch_checksum darwin-arm64)"
+          sha_darwin_amd64="$(fetch_checksum darwin-amd64)"
+          sha_linux_arm64="$(fetch_checksum linux-arm64)"
+          sha_linux_amd64="$(fetch_checksum linux-amd64)"
+          for checksum in "${sha_darwin_arm64}" "${sha_darwin_amd64}" "${sha_linux_arm64}" "${sha_linux_amd64}"; do
+            if ! printf '%s' "${checksum}" | grep -Eq '^[0-9a-f]{64}$'; then
+              echo "refusing to publish the formula: invalid checksum '${checksum}'" >&2
+              exit 1
+            fi
+          done
+          sed \
+            -e "s/__VERSION__/${version}/g" \
+            -e "s/__SHA_DARWIN_ARM64__/${sha_darwin_arm64}/g" \
+            -e "s/__SHA_DARWIN_AMD64__/${sha_darwin_amd64}/g" \
+            -e "s/__SHA_LINUX_ARM64__/${sha_linux_arm64}/g" \
+            -e "s/__SHA_LINUX_AMD64__/${sha_linux_amd64}/g" \
+            packaging/homebrew/tael.rb.tmpl > /tmp/tael.rb
+          cat /tmp/tael.rb
+
+      - name: Push the formula to taelio/homebrew-tap
+        env:
+          TAG: ${{ github.ref_name }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping the tap publish." >&2
+            exit 0
+          fi
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/taelio/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp /tmp/tael.rb tap/Formula/tael.rb
+          cd tap
+          if git diff --quiet; then
+            echo "Formula already current for ${TAG}; nothing to push."
+            exit 0
+          fi
+          git config user.name "tael-release-bot"
+          git config user.email "hello@tael.io"
+          git add Formula/tael.rb
+          git commit -m "tael ${TAG}"
+          git push origin HEAD

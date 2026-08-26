@@ -6,19 +6,47 @@ without leaving the terminal.
 
 ## Install
 
-With Go 1.26 or newer:
+Homebrew (macOS and Linux):
 
 ```sh
-go install tael.io/cli@latest
+brew install taelio/tap/tael
 ```
 
-Or build from source:
+Or with the install script, which resolves the latest release, verifies its
+SHA-256 checksum, and installs to `/usr/local/bin`:
 
 ```sh
-git clone https://github.com/tael-io/cli
+curl -fsSL https://raw.githubusercontent.com/taelio/cli/main/install.sh | bash
+```
+
+Pin a version or change the destination:
+
+```sh
+TAEL_VERSION=v0.2.0 INSTALL_DIR="$HOME/.local/bin" \
+  bash <(curl -fsSL https://raw.githubusercontent.com/taelio/cli/main/install.sh)
+```
+
+Windows binaries are published on the
+[releases page](https://github.com/taelio/cli/releases).
+
+Build from source with Go 1.26 or newer:
+
+```sh
+git clone https://github.com/taelio/cli
 cd cli
 make build   # produces ./tael
 ```
+
+### In a cluster
+
+Tael runs the CLI as an operations toolbox pod so you can execute commands
+against the platform from inside a cluster:
+
+```sh
+kubectl exec -it deploy/tael-cli -- tael status
+```
+
+The pod idles and binds no port, so it has no Service and no Ingress.
 
 ## Login
 
