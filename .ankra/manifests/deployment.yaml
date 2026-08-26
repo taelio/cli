@@ -6,6 +6,10 @@ metadata:
     app.kubernetes.io/name: tael-cli
 automountServiceAccountToken: false
 ---
+# The CLI runs as an ad-hoc operations toolbox, not a web service: the pod
+# stays alive so an operator can `kubectl exec` into it and run `tael`
+# commands against the platform from inside the cluster. It binds no port,
+# so there is deliberately no Service and no Ingress.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,7 +17,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tael-cli
 spec:
-  replicas: 1
+  replicas: ${{ ankra.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: tael-cli
@@ -23,15 +27,9 @@ spec:
         app.kubernetes.io/name: tael-cli
     spec:
       serviceAccountName: tael-cli
-      automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      imagePullSecrets:
-        - name: ankra-registry-pull
       containers:
         - name: tael-cli
           image: registry.ankra.cloud/org-ff91b1e8-3f9c-4699-aeea-b45bf4d00dd4/cli:${{ ankra.image_tag }}
@@ -44,40 +42,49 @@ spec:
             capabilities:
               drop:
                 - ALL
-          ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
+          # Idle forever, but stay signal-responsive so the pod terminates
+          # promptly instead of waiting out its grace period.
+          command:
+            - /bin/sh
+            - -c
+            - 'trap "exit 0" TERM INT; sleep infinity & wait'
           env:
-            - name: TAEL_CONFIG
+            - name: TAEL_BASE_URL
+              value: ${{ ankra.tael_base_url }}
+            - name: TAEL_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: tael-cli-env
-                  key: TAEL_CONFIG
+                  key: TAEL_API_TOKEN
                   optional: true
+            - name: HOME
+              value: /home/tael
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-          startupProbe:
-            tcpSocket:
-              port: http
-            failureThreshold: 30
-            periodSeconds: 2
+            - name: home
+              mountPath: /home/tael
+          # The binary answering is the only meaningful health signal for a
+          # toolbox pod; there is no socket to probe.
           livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: 10
+            exec:
+              command: ["/usr/local/bin/tael", "version"]
+            periodSeconds: 30
+            timeoutSeconds: 5
           readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: 5
+            exec:
+              command: ["/usr/local/bin/tael", "version"]
+            periodSeconds: 30
+            timeoutSeconds: 5
           resources:
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: ${{ ankra.cpu_limit }}
+              memory: ${{ ankra.memory_limit }}
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: ${{ ankra.cpu_request }}
+              memory: ${{ ankra.memory_request }}
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: home
           emptyDir: {}

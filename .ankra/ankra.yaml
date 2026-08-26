@@ -25,11 +25,6 @@ options:
     default: "1"
     required: false
     description: "Number of pod replicas."
-  - name: "target_port"
-    type: "number"
-    default: "8080"
-    required: false
-    description: "Container port the application listens on."
   - name: "cpu_request"
     type: "string"
     default: "100m"
@@ -50,23 +45,8 @@ options:
     default: "512Mi"
     required: false
     description: "Memory limit per pod."
-  - name: "ingress_enabled"
-    type: "boolean"
-    default: "false"
-    required: false
-    description: "Expose the service through an Ingress."
-  - name: "ingress_host"
+  - name: "tael_base_url"
     type: "string"
-    default: ""
+    default: "https://api.tael.io"
     required: false
-    description: "Ingress hostname (required when ingress is enabled)."
-  - name: "ingress_class"
-    type: "string"
-    default: ""
-    required: false
-    description: "IngressClass name (e.g. nginx)."
-  - name: "ingress_tls_issuer"
-    type: "string"
-    default: "letsencrypt-prod"
-    required: false
-    description: "cert-manager ClusterIssuer that mints the Ingress certificate. Leave empty to serve plain HTTP."
+    description: "Tael API the CLI talks to from inside the cluster."

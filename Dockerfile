@@ -37,8 +37,8 @@ COPY --from=builder /out/tael /usr/local/bin/tael
 USER 10001:10001
 WORKDIR /home/tael
 
-# The CLI does not bind a listener; exposed to match the manifest's container port.
-EXPOSE 8080
-
+# No EXPOSE: the CLI binds no listener. Run it directly for one-shot use
+# (`docker run ... tael apps`), or let the toolbox Deployment override the
+# command to idle so operators can exec in and run commands ad hoc.
 ENTRYPOINT ["/usr/local/bin/tael"]
 CMD ["--help"]
