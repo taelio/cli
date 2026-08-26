@@ -1,0 +1,13 @@
+# Built binary
+/tael
+/dist/
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.*
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

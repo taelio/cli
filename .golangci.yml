@@ -1,0 +1,11 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Terminal output: a failed write to stdout/stderr or an in-memory
+      # tabwriter has no recovery path in a CLI, so these are not checked.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
