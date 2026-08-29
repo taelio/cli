@@ -87,11 +87,17 @@ text rendering (default `-o text`).
 | `tael logs [app]`   | Print recent logs; `-f` streams new lines live                 |
 | `tael open [app]`   | Open the app's live URL in the browser                         |
 | `tael incidents`    | List incidents in the workspace                                |
+| `tael solutions list` | List the Tael Managed solutions installed in the workspace   |
+| `tael solutions add <key> [--for <app>] [--size small\|medium\|large]` | Add one from the catalog: `postgres`, `monitoring`, `object-storage`, `backups`, `secrets` |
+| `tael solutions status <name>` | Show a solution's live status and checks             |
+| `tael solutions connect <name> --app <app>` | Connect a solution to an app; it reads the values on its next deploy |
+| `tael solutions remove <name> [--force]` | Remove a solution; stored data is deleted and volumes are released |
 | `tael init`         | Connect a repository (currently guides to the web app)         |
 | `tael version`      | Show the CLI version and commit                                |
 
 Commands taking `[app]` accept an app name or id. When the workspace has
-exactly one app the argument can be omitted.
+exactly one app the argument can be omitted. A solution's `<name>` is its
+display name, its instance name or its id.
 
 ## Exit codes
 
