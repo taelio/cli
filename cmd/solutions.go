@@ -162,6 +162,86 @@ var solutionsConnectCmd = &cobra.Command{
 	},
 }
 
+var solutionsCatalogCmd = &cobra.Command{
+	Use:   "catalog",
+	Short: "What can be added, and what the plan allows",
+	Args:  cobra.NoArgs,
+	RunE: func(command *cobra.Command, _ []string) error {
+		catalog, catalogError := apiClient.GetSolutionCatalog(command.Context())
+		if catalogError != nil {
+			return catalogError
+		}
+		if rendered, renderError := renderJSON(command, catalog); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprint(command.OutOrStdout(), renderCatalog(catalog))
+		return nil
+	},
+}
+
+var solutionsUpgradeCmd = &cobra.Command{
+	Use:   "upgrade <name>",
+	Short: "Apply the newer version Tael publishes",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(command *cobra.Command, args []string) error {
+		solution, resolveError := resolveSolutionArgument(command.Context(), args[0])
+		if resolveError != nil {
+			return resolveError
+		}
+		operation, upgradeError := apiClient.UpgradeSolution(command.Context(), solution.ID)
+		if upgradeError != nil {
+			return upgradeError
+		}
+		if rendered, renderError := renderJSON(command, operation); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprintf(command.OutOrStdout(), "Updating %s to the newer version. Follow it with `tael solutions status %s`.\n", solution.Name, solution.ID)
+		return nil
+	},
+}
+
+var solutionsRetryCmd = &cobra.Command{
+	Use:   "retry <name>",
+	Short: "Run a failed install again",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(command *cobra.Command, args []string) error {
+		solution, resolveError := resolveSolutionArgument(command.Context(), args[0])
+		if resolveError != nil {
+			return resolveError
+		}
+		operation, retryError := apiClient.RetrySolution(command.Context(), solution.ID)
+		if retryError != nil {
+			return retryError
+		}
+		if rendered, renderError := renderJSON(command, operation); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprintf(command.OutOrStdout(), "Installing %s again. Follow it with `tael solutions status %s`.\n", solution.Name, solution.ID)
+		return nil
+	},
+}
+
+var solutionsConnectionCmd = &cobra.Command{
+	Use:   "connection <name>",
+	Short: "The connection an app reads, with its secrets masked",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(command *cobra.Command, args []string) error {
+		solution, resolveError := resolveSolutionArgument(command.Context(), args[0])
+		if resolveError != nil {
+			return resolveError
+		}
+		connection, connectionError := apiClient.GetSolutionConnection(command.Context(), solution.ID)
+		if connectionError != nil {
+			return connectionError
+		}
+		if rendered, renderError := renderJSON(command, connection); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprint(command.OutOrStdout(), renderConnection(solution, connection))
+		return nil
+	},
+}
+
 func init() {
 	solutionsAddCmd.Flags().StringVar(&solutionsAddForFlag, "for", "", "App the solution is for (a database is made for one app)")
 	solutionsAddCmd.Flags().StringVar(&solutionsAddSizeFlag, "size", "", "Size: small, medium or large (the catalog's default when unset)")
@@ -169,8 +249,62 @@ func init() {
 	solutionsConnectCmd.Flags().StringVar(&solutionsConnectAppFlag, "app", "", "App to connect it to (name or id)")
 	_ = solutionsConnectCmd.MarkFlagRequired("app")
 
-	solutionsCmd.AddCommand(solutionsListCmd, solutionsAddCmd, solutionsRemoveCmd, solutionsStatusCmd, solutionsConnectCmd)
+	solutionsCmd.AddCommand(solutionsListCmd, solutionsCatalogCmd, solutionsAddCmd, solutionsRemoveCmd, solutionsStatusCmd,
+		solutionsConnectCmd, solutionsConnectionCmd, solutionsUpgradeCmd, solutionsRetryCmd)
 	rootCmd.AddCommand(solutionsCmd)
+}
+
+// renderCatalog lists what can be added, with the plan gate and sizes.
+func renderCatalog(catalog *client.SolutionCatalogResponse) string {
+	var builder strings.Builder
+	if promise := strings.TrimSpace(catalog.Promise); promise != "" {
+		builder.WriteString(promise + "\n")
+	}
+	table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(table, "KEY\tNAME\tCATEGORY\tAVAILABILITY\tSIZES")
+	for _, entry := range catalog.Solutions {
+		sizes := make([]string, 0, len(entry.Presets))
+		for _, preset := range entry.Presets {
+			label := preset.Key
+			if preset.Key == entry.DefaultPreset {
+				label += " (default)"
+			}
+			sizes = append(sizes, label)
+		}
+		availability := entry.Availability.Label
+		if entry.Availability.State == "available" {
+			availability = "can be added"
+		}
+		if entry.Included {
+			availability = "included"
+		}
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", entry.Key, entry.Name, valueOrDash(entry.Category), valueOrDash(availability), valueOrDash(strings.Join(sizes, ", ")))
+	}
+	_ = table.Flush()
+	fmt.Fprintf(&builder, "Add one with `tael solutions add <key>`. Plan: %s.\n", valueOrDash(catalog.Plan))
+	return builder.String()
+}
+
+// renderConnection prints the connection's variables with the secrets
+// masked, and says where the values can be seen.
+func renderConnection(solution *client.Solution, connection *client.SolutionConnectionResponse) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Connection for %s (secrets masked):\n", solution.Name)
+	if len(connection.Variables) == 0 {
+		builder.WriteString("  Nothing yet; the connection is collected once it is ready.\n")
+	}
+	table := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+	for _, variable := range connection.Variables {
+		if variable.Secret {
+			fmt.Fprintf(table, "  %s\t%s\tsecret\n", variable.Name, valueOrDash(variable.Value))
+			continue
+		}
+		fmt.Fprintf(table, "  %s\t%s\n", variable.Name, valueOrDash(variable.Value))
+	}
+	_ = table.Flush()
+	builder.WriteString("Apps connected with `tael solutions connect` read the real values on deploy; nobody has to see them.\n")
+	builder.WriteString("Revealing the values is a browser action: open the solution in the web app. Every reveal is on the record.\n")
+	return builder.String()
 }
 
 // presentSolutions drops rows that are gone: removed, or retired with a

@@ -208,6 +208,42 @@ func (client *Client) RemoveSolution(requestContext context.Context, solutionID 
 	return &operation, nil
 }
 
+// UpgradeSolution applies the newer version Tael publishes. 409 when
+// there is none, the solution is included with the runtime, or it is busy.
+func (client *Client) UpgradeSolution(requestContext context.Context, solutionID string) (*SolutionOperationResponse, error) {
+	var operation SolutionOperationResponse
+	if requestError := client.doJSON(requestContext, http.MethodPost, solutionPath(solutionID, "/upgrade"), struct{}{}, &operation); requestError != nil {
+		return nil, requestError
+	}
+	return &operation, nil
+}
+
+// RetrySolution runs a failed install again. 409 when it did not fail.
+func (client *Client) RetrySolution(requestContext context.Context, solutionID string) (*SolutionOperationResponse, error) {
+	var operation SolutionOperationResponse
+	if requestError := client.doJSON(requestContext, http.MethodPost, solutionPath(solutionID, "/retry"), struct{}{}, &operation); requestError != nil {
+		return nil, requestError
+	}
+	return &operation, nil
+}
+
+// SolutionConnectionResponse is a solution's connection as a token may
+// see it: names, and values with the secrets masked. Revealing values is
+// a browser action, so Revealed is always false here.
+type SolutionConnectionResponse struct {
+	Variables []ConnectionVariable `json:"variables"`
+	Revealed  bool                 `json:"revealed"`
+}
+
+// GetSolutionConnection reads the masked connection summary.
+func (client *Client) GetSolutionConnection(requestContext context.Context, solutionID string) (*SolutionConnectionResponse, error) {
+	var connection SolutionConnectionResponse
+	if requestError := client.doJSON(requestContext, http.MethodGet, solutionPath(solutionID, "/connection"), nil, &connection); requestError != nil {
+		return nil, requestError
+	}
+	return &connection, nil
+}
+
 // MatchesSolution says whether a person's word for a solution — its id,
 // its instance name, or its display name — names this one. Display names
 // match case-insensitively, so "tael managed postgres for web" works.

@@ -73,6 +73,11 @@ precedence.
 All commands accept `-o json` to print the raw API response instead of the
 text rendering (default `-o text`).
 
+A token is made inside one workspace and acts there. `tael workspace use
+<slug>` records a choice (`workspace_id` in `~/.tael.yaml`, sent as the
+`X-Tael-Workspace-Id` header) and keeps it only when the API honours it for
+your token; otherwise it says so and how to get a token for that workspace.
+
 ## Commands
 
 | Command             | Description                                                    |
@@ -105,6 +110,14 @@ text rendering (default `-o text`).
 | `tael solutions status <name>` | Show a solution's live status and checks             |
 | `tael solutions connect <name> --app <app>` | Connect a solution to an app; it reads the values on its next deploy |
 | `tael solutions remove <name> [--force]` | Remove a solution; stored data is deleted and volumes are released |
+| `tael solutions catalog` | What can be added, with the plan gate and sizes                |
+| `tael solutions connection <name>` | The connection an app reads, secrets masked (revealing is a browser action) |
+| `tael solutions upgrade <name>` | Apply the newer version Tael publishes                      |
+| `tael solutions retry <name>` | Run a failed install again                                    |
+| `tael digest [--days N]` | What happened over the last days in Tael's words, then the numbers; says when the reading is still being written |
+| `tael suggestions [--all]` | What Tael noticed without being asked; `tael suggestions resolve <id>` marks one dealt with |
+| `tael workspaces`   | Every workspace you are in, with the one the CLI acts in marked |
+| `tael workspace use <slug>` | Act in another workspace, where the token can follow (see below) |
 | `tael members`      | Who is in the workspace and how it admits people               |
 | `tael members remove <user>` | Take a person out (by GitHub login, email, name or id); owners and admins only |
 | `tael invite link [--max-uses N]` | Make a join link anyone can use (`--role member\|admin`)   |
