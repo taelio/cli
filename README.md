@@ -81,11 +81,18 @@ text rendering (default `-o text`).
 | `tael logout`       | Remove the saved token from `~/.tael.yaml`                     |
 | `tael whoami`       | Show the authenticated user and workspace                      |
 | `tael apps` (`ps`)  | List apps: name, status, URL, last update                      |
+| `tael app [app]`    | One app: status, address, repository, framework, last deploy and checks |
 | `tael status [app]` | Show an app's live status and health checks                    |
 | `tael deploy [app]` | Trigger a deploy and print the deploy id                       |
 | `tael deploys [app]`| List an app's deploy history                                   |
 | `tael logs [app]`   | Print recent logs; `-f` streams new lines live                 |
 | `tael open [app]`   | Open the app's live URL in the browser                         |
+| `tael domains`      | Every app's web address, with the live ones marked             |
+| `tael setup [app]`  | Where an app's setup stands: what Tael read and wrote, the setup pull request |
+| `tael go-live <app>` | Merge the setup pull request so the first deploy starts       |
+| `tael retry <app>`  | Run a failed setup again from the step that failed             |
+| `tael remove <app> --yes` | Take an app out of Tael; the repository is untouched     |
+| `tael pipeline [app] [--set step.setting=value]` | Show the pipeline, or change a step's setting (Tael opens a pull request with it) |
 | `tael incidents`    | List incidents in the workspace                                |
 | `tael tasks [--done] [app]` | What Tael is doing, has done, or needs you for; `--done` lists finished tasks |
 | `tael task <id>`    | One task: its plan, change, evidence, outcome and comments     |
