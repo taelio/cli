@@ -100,11 +100,21 @@ your token; otherwise it says so and how to get a token for that workspace.
 | `tael pipeline [app] [--set step.setting=value]` | Show the pipeline, or change a step's setting (Tael opens a pull request with it) |
 | `tael incidents`    | List incidents in the workspace                                |
 | `tael tasks [--done] [app]` | What Tael is doing, has done, or needs you for; `--done` lists finished tasks |
+| `tael tasks new "<brief>" [--app] [--kind]` | Ask Tael to look into something, in your words     |
 | `tael task <id>`    | One task: its plan, change, evidence, outcome and comments     |
+| `tael task comment <id> "<text>"` | Leave a comment on a task, for Tael and the team |
+| `tael needs-you`    | What is waiting on you: decisions Tael asked for, and proposals |
 | `tael approve <id> [--note]` | Say yes to what a task is waiting on (or to a proposal) |
 | `tael decline <id> [--note]` | Say no                                                |
 | `tael why [app]`    | Why the last deploy failed; asks Tael and follows the investigation when nothing failed yet |
 | `tael pause` / `tael resume` | Stop Tael starting or carrying out anything, and let it work again |
+| `tael settings ai`  | How much Tael may do on its own: who approves, what runs unasked, quiet hours |
+| `tael settings ai --approvers admins\|members --pre-approve category=N --quiet-hours HH:MM-HH:MM[@Zone] --clear-quiet-hours` | Change it (owners and admins only) |
+| `tael plan`         | The workspace's plan, what it holds, the runtime, and any coupon in force |
+| `tael coupon <code>` | Apply a coupon code                                           |
+| `tael tokens`       | Your API tokens for this workspace (never their secrets)       |
+| `tael tokens create <name> [--expires 30d\|YYYY-MM-DD]` | Make a token; the secret is printed this once |
+| `tael tokens revoke <id or name>` | Make a token stop working                          |
 | `tael solutions list` | List the Tael Managed solutions installed in the workspace   |
 | `tael solutions add <key> [--for <app>] [--size small\|medium\|large]` | Add one from the catalog: `postgres`, `monitoring`, `object-storage`, `backups`, `secrets` |
 | `tael solutions status <name>` | Show a solution's live status and checks             |
