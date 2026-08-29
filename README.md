@@ -105,6 +105,12 @@ text rendering (default `-o text`).
 | `tael solutions status <name>` | Show a solution's live status and checks             |
 | `tael solutions connect <name> --app <app>` | Connect a solution to an app; it reads the values on its next deploy |
 | `tael solutions remove <name> [--force]` | Remove a solution; stored data is deleted and volumes are released |
+| `tael members`      | Who is in the workspace and how it admits people               |
+| `tael members remove <user>` | Take a person out (by GitHub login, email, name or id); owners and admins only |
+| `tael invite link [--max-uses N]` | Make a join link anyone can use (`--role member\|admin`)   |
+| `tael invite email <address>` / `tael invite github <login>` | Invite one person; the join link is shown once |
+| `tael invites`      | List invitations; `tael invites revoke <id>` stops one working |
+| `tael team join-policy [--github-org on\|off]` | Show or change how people join: by invitation only, or anyone with access to the GitHub repositories |
 | `tael repos`        | The repositories Tael can see, ready for `tael new`            |
 | `tael new --repo owner/name [--branch] [--name] [--database] [--go-live] [--no-follow]` | Put a repository live: Tael reads it, sets it up and follows the setup until the pull request is ready |
 | `tael init`         | How to connect a repository (installing the GitHub App is a browser step) |
