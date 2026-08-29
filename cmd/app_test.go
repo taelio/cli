@@ -65,7 +65,7 @@ func TestRemoveNeedsYesAndThenRemoves(t *testing.T) {
 	if refusal == nil || exitCodeFor(refusal) != exitUsage || !strings.Contains(refusal.Error(), "--yes") {
 		t.Fatalf("tael remove without --yes = %v, want a usage refusal naming --yes", refusal)
 	}
-	if lastRequest(recorded, http.MethodDelete, "/api/v1/apps") != nil {
+	if lastRequest(recorded, http.MethodDelete, "/api/v1/apps/web") != nil {
 		t.Fatalf("remove without --yes must not call the API")
 	}
 

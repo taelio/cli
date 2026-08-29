@@ -1,14 +1,9 @@
 package client
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 // The Activity surface: tasks, their plans, evidence and outcomes, the
@@ -205,57 +200,4 @@ func (client *Client) SetPaused(requestContext context.Context, paused bool) (*A
 		return nil, requestError
 	}
 	return &settings, nil
-}
-
-// Event is one entry on the workspace stream. Payload is whatever the
-// event carries; task events carry task_id, title, status and the app.
-type Event struct {
-	ID        int64           `json:"id"`
-	EventType string          `json:"event_type"`
-	Payload   json.RawMessage `json:"payload"`
-	CreatedAt string          `json:"created_at"`
-}
-
-// FollowEvents tails the workspace stream, calling handle for each event
-// until handle returns false, the stream ends, or the context is
-// cancelled. Frames are `id:` then `data:` with a JSON event; comment
-// lines are heartbeats.
-func (client *Client) FollowEvents(requestContext context.Context, handle func(event Event) bool) error {
-	request, buildError := client.newRequest(requestContext, http.MethodGet, "/api/v1/events?stream=true", nil)
-	if buildError != nil {
-		return buildError
-	}
-	request.Header.Set("Accept", "text/event-stream")
-
-	response, sendError := client.StreamingHTTP.Do(request)
-	if sendError != nil {
-		return fmt.Errorf("could not reach %s: %w", client.BaseURL, sendError)
-	}
-	defer closeBody(response)
-
-	if response.StatusCode != http.StatusOK {
-		responseBody, _ := readResponseBody(response)
-		return errorFromResponse(response.StatusCode, responseBody)
-	}
-
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		payload, isData := strings.CutPrefix(line, "data:")
-		if !isData {
-			continue
-		}
-		var event Event
-		if unmarshalError := json.Unmarshal([]byte(strings.TrimPrefix(payload, " ")), &event); unmarshalError != nil {
-			continue
-		}
-		if !handle(event) {
-			return nil
-		}
-	}
-	if scanError := scanner.Err(); scanError != nil && requestContext.Err() == nil && scanError != io.EOF {
-		return fmt.Errorf("event stream interrupted: %w", scanError)
-	}
-	return nil
 }

@@ -105,7 +105,9 @@ text rendering (default `-o text`).
 | `tael solutions status <name>` | Show a solution's live status and checks             |
 | `tael solutions connect <name> --app <app>` | Connect a solution to an app; it reads the values on its next deploy |
 | `tael solutions remove <name> [--force]` | Remove a solution; stored data is deleted and volumes are released |
-| `tael init`         | Connect a repository (currently guides to the web app)         |
+| `tael repos`        | The repositories Tael can see, ready for `tael new`            |
+| `tael new --repo owner/name [--branch] [--name] [--database] [--go-live] [--no-follow]` | Put a repository live: Tael reads it, sets it up and follows the setup until the pull request is ready |
+| `tael init`         | How to connect a repository (installing the GitHub App is a browser step) |
 | `tael version`      | Show the CLI version and commit                                |
 
 Commands taking `[app]` accept an app name or id. When the workspace has

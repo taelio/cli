@@ -93,11 +93,13 @@ type recordedRequest struct {
 	Body   string
 }
 
-// lastRequest is the most recent request matching method and path prefix.
-func lastRequest(recorded *[]recordedRequest, method string, pathPrefix string) *recordedRequest {
+// lastRequest is the most recent request with this method and path (the
+// query string aside).
+func lastRequest(recorded *[]recordedRequest, method string, path string) *recordedRequest {
 	for index := len(*recorded) - 1; index >= 0; index-- {
 		request := (*recorded)[index]
-		if request.Method == method && strings.HasPrefix(request.Path, pathPrefix) {
+		requestPath, _, _ := strings.Cut(request.Path, "?")
+		if request.Method == method && requestPath == path {
 			return &request
 		}
 	}
