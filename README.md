@@ -87,6 +87,12 @@ text rendering (default `-o text`).
 | `tael logs [app]`   | Print recent logs; `-f` streams new lines live                 |
 | `tael open [app]`   | Open the app's live URL in the browser                         |
 | `tael incidents`    | List incidents in the workspace                                |
+| `tael tasks [--done] [app]` | What Tael is doing, has done, or needs you for; `--done` lists finished tasks |
+| `tael task <id>`    | One task: its plan, change, evidence, outcome and comments     |
+| `tael approve <id> [--note]` | Say yes to what a task is waiting on (or to a proposal) |
+| `tael decline <id> [--note]` | Say no                                                |
+| `tael why [app]`    | Why the last deploy failed; asks Tael and follows the investigation when nothing failed yet |
+| `tael pause` / `tael resume` | Stop Tael starting or carrying out anything, and let it work again |
 | `tael solutions list` | List the Tael Managed solutions installed in the workspace   |
 | `tael solutions add <key> [--for <app>] [--size small\|medium\|large]` | Add one from the catalog: `postgres`, `monitoring`, `object-storage`, `backups`, `secrets` |
 | `tael solutions status <name>` | Show a solution's live status and checks             |
