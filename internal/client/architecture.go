@@ -162,7 +162,7 @@ type ArchitectureOutcome struct {
 
 // ErrPlanningUnavailable is the 501 answer: no model is set up on this
 // deployment to write plans. The sentence is the product's.
-var ErrPlanningUnavailable = errors.New("Tael cannot plan changes on this deployment yet.")
+var ErrPlanningUnavailable = errors.New("Tael cannot plan changes on this deployment yet")
 
 const architecturePath = "/api/v1/architecture"
 

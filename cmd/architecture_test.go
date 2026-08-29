@@ -199,7 +199,7 @@ func TestPlanWithASentence(t *testing.T) {
 func TestPlanWhenTaelCannotPlan(t *testing.T) {
 	noModel, _ := newAPIServer(t, route{http.MethodPost, "/api/v1/architecture/plan", http.StatusNotImplemented, `{"detail":"Tael cannot plan changes on this deployment yet."}`})
 	_, planError := runCommand(t, noModel, "plan", "Add a database")
-	if !errors.Is(planError, client.ErrPlanningUnavailable) || planError.Error() != "Tael cannot plan changes on this deployment yet." || exitCodeFor(planError) != exitError {
+	if !errors.Is(planError, client.ErrPlanningUnavailable) || planError.Error() != "Tael cannot plan changes on this deployment yet" || exitCodeFor(planError) != exitError {
 		t.Fatalf("tael plan on 501 = %v, want the sentence and exit 1", planError)
 	}
 
