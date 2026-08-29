@@ -112,7 +112,7 @@ your token; otherwise it says so and how to get a token for that workspace.
 | `tael pause` / `tael resume` | Stop Tael starting or carrying out anything, and let it work again |
 | `tael settings ai`  | How much Tael may do on its own: who approves, what runs unasked, quiet hours |
 | `tael settings ai --approvers admins\|members --pre-approve category=N --quiet-hours HH:MM-HH:MM[@Zone] --clear-quiet-hours` | Change it (owners and admins only) |
-| `tael plan`         | The workspace's plan, what it holds, the runtime, and any coupon in force |
+| `tael plan`         | The workspace's plan, what it holds, the runtime, and any coupon in force (with a sentence, see Architecture below) |
 | `tael coupon <code>` | Apply a coupon code                                           |
 | `tael tokens`       | Your API tokens for this workspace (never their secrets)       |
 | `tael tokens create <name> [--expires 30d\|YYYY-MM-DD]` | Make a token; the secret is printed this once |
@@ -144,6 +144,24 @@ your token; otherwise it says so and how to get a token for that workspace.
 Commands taking `[app]` accept an app name or id. When the workspace has
 exactly one app the argument can be omitted. A solution's `<name>` is its
 display name, its instance name or its id.
+
+### Architecture
+
+The workspace as one picture, a change planned from a sentence, and the
+build that carries it out. Nothing runs until you say `tael build`.
+
+| Command             | Description                                                    |
+| ------------------- | -------------------------------------------------------------- |
+| `tael architecture [--app <app>]` | The picture in text: addresses, apps, solutions and the runtime, each with what it connects to, then Tael's suggestions; `--app` narrows it to one app and what it touches |
+| `tael plan "<what you want>" [--json]` | Ask Tael to plan a change in your words: the summary, the changes as numbered rows (with why one is blocked), any questions; kept as the last plan |
+| `tael plan "<what you want>" --build [--yes]` | Plan and build in one go, after the same question |
+| `tael build [--plan <file>] [--yes]` | Carry out the last plan (or the file given): shows the changes, asks on a terminal unless `--yes`, then says what is happening for each; blocked changes are skipped, refusals are said in a sentence and exit 1 |
+
+`tael plan` keeps the plan at `~/.tael/last-plan.json` (beside the config
+file when `TAEL_CONFIG` names one); `tael build --plan` also reads what
+`tael plan -o json` printed. Without a terminal and without `--yes`,
+`tael build` refuses (exit 2) rather than guess. On a deployment with no
+model to plan with, `tael plan` says so and exits 1.
 
 ### What stays in the browser
 

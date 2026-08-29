@@ -9,11 +9,25 @@ import (
 	"tael.io/cli/internal/client"
 )
 
+// tael plan does two things by what it is given. With a sentence it asks
+// Tael to plan a change to the workspace (see architecture.go); without
+// one it shows the workspace's plan: the tier, what it holds, the runtime
+// and any coupon in force.
 var planCmd = &cobra.Command{
-	Use:   "plan",
-	Short: "The workspace's plan, what it holds, and any coupon in force",
-	Args:  cobra.NoArgs,
-	RunE: func(command *cobra.Command, _ []string) error {
+	Use:   "plan [\"<what you want>\"] [--build] [--yes]",
+	Short: "Ask Tael to plan a change in your words; alone, the workspace's plan and coupon",
+	Long: `With a sentence, ask Tael to plan a change: "Add a database for web",
+"Connect api to the object storage". Tael answers with the changes it
+would make, kept as the last plan for ` + "`tael build`" + `; nothing runs until
+you say so. --build carries the plan out straight away, after asking.
+
+Without a sentence, the workspace's plan: the tier, what it holds, the
+runtime, and any coupon in force.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(command *cobra.Command, args []string) error {
+		if len(args) > 0 || planBuildFlag {
+			return runArchitecturePlan(command, args)
+		}
 		status, statusError := apiClient.GetWorkspaceStatus(command.Context())
 		if statusError != nil {
 			return statusError
@@ -22,8 +36,12 @@ var planCmd = &cobra.Command{
 		if couponError != nil {
 			return couponError
 		}
-		if rendered, renderError := renderJSON(command, map[string]any{"status": status, "coupon": coupon}); rendered || renderError != nil {
-			return renderError
+		asJSON, formatError := wantsJSON(planJSONFlag)
+		if formatError != nil {
+			return formatError
+		}
+		if asJSON {
+			return writeJSON(command, map[string]any{"status": status, "coupon": coupon})
 		}
 		fmt.Fprint(command.OutOrStdout(), renderPlan(status, coupon.Grant))
 		return nil
