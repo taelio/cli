@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,33 +23,34 @@ import (
 // `tael build` carries that plan out, after asking. Nothing runs until the
 // person says build.
 
-var architectureAppFlag string
+var (
+	architectureAppFlag   string
+	architectureStackFlag string
+)
 
 var architectureCmd = &cobra.Command{
-	Use:   "architecture [--app <app>]",
-	Short: "The workspace as one picture: addresses, apps, solutions and the runtime",
+	Use:   "architecture [--app <app> | --stack <stack>]",
+	Short: "The workspace as one picture: stacks, apps, solutions and the runtime",
 	Long: `The workspace as one picture, in text: the addresses that reach your apps,
-the apps, the solutions they read, and the runtime they run on, with what
-connects them. Suggestions are what Tael would change, phrased as the
-sentence that asks for it. --app narrows the picture to one app and what
-it touches.`,
+the stacks and the apps, the solutions they read, and the runtime they run
+on, with what connects them. Suggestions are what Tael would change,
+phrased as the sentence that asks for it. --app narrows the picture to one
+app — its repository, addresses, solutions and the apps it calls — and
+--stack to one stack's apps.`,
 	Args: cobra.NoArgs,
 	RunE: func(command *cobra.Command, _ []string) error {
-		graph, graphError := apiClient.GetArchitecture(command.Context())
+		scope, scopeError := resolveScopeFlags(command, architectureAppFlag, architectureStackFlag)
+		if scopeError != nil {
+			return scopeError
+		}
+		graph, graphError := apiClient.GetArchitecture(command.Context(), scope)
 		if graphError != nil {
 			return graphError
-		}
-		if architectureAppFlag != "" {
-			narrowed, narrowError := neighbourhood(graph, architectureAppFlag)
-			if narrowError != nil {
-				return narrowError
-			}
-			graph = narrowed
 		}
 		if rendered, renderError := renderJSON(command, graph); rendered || renderError != nil {
 			return renderError
 		}
-		fmt.Fprint(command.OutOrStdout(), renderArchitecture(graph))
+		fmt.Fprint(command.OutOrStdout(), renderArchitecture(graph, stackMembersFor(command.Context(), graph)))
 		return nil
 	},
 }
@@ -57,21 +59,26 @@ var (
 	planBuildFlag bool
 	planYesFlag   bool
 	planJSONFlag  bool
+	planAppFlag   string
+	planStackFlag string
 )
 
 var (
-	buildPlanFlag string
-	buildYesFlag  bool
+	buildPlanFlag  string
+	buildYesFlag   bool
+	buildAppFlag   string
+	buildStackFlag string
 )
 
 var buildCmd = &cobra.Command{
-	Use:   "build [--plan <file>] [--yes]",
+	Use:   "build [--plan <file>] [--app <app> | --stack <stack>] [--yes]",
 	Short: "Carry out the last plan: what `tael plan` proposed, after you confirm",
 	Long: `Carry out the last plan that "tael plan" wrote, or the plan in the file given.
 The changes are shown first and Tael asks before it starts; --yes answers
 for you, which scripts need. Blocked changes are listed and skipped. Every
 change that goes through is one Tael tells you about when it is ready;
-anything refused is said in a sentence, and the command exits 1.`,
+anything refused is said in a sentence, and the command exits 1. --app and
+--stack scope the build the way they scope the plan.`,
 	Args: cobra.NoArgs,
 	RunE: func(command *cobra.Command, _ []string) error {
 		path, fromFlag := buildPlanFlag, buildPlanFlag != ""
@@ -81,6 +88,10 @@ anything refused is said in a sentence, and the command exits 1.`,
 		plan, readError := readPlan(path, fromFlag)
 		if readError != nil {
 			return readError
+		}
+		scope, scopeError := resolveScopeFlags(command, buildAppFlag, buildStackFlag)
+		if scopeError != nil {
+			return scopeError
 		}
 		asJSON, formatError := wantsJSON(false)
 		if formatError != nil {
@@ -93,7 +104,7 @@ anything refused is said in a sentence, and the command exits 1.`,
 			}
 			fmt.Fprint(out, renderChangeRows(plan.Changes))
 		}
-		outcome, buildError := buildChanges(command, plan.Changes, buildYesFlag, asJSON)
+		outcome, buildError := buildChanges(command, plan.Changes, buildYesFlag, asJSON, scope)
 		if asJSON && outcome != nil {
 			if encodeError := writeJSON(command, outcome); encodeError != nil {
 				return encodeError
@@ -109,73 +120,76 @@ anything refused is said in a sentence, and the command exits 1.`,
 
 func init() {
 	architectureCmd.Flags().StringVar(&architectureAppFlag, "app", "", "Only this app (name or id) and what it touches")
+	architectureCmd.Flags().StringVar(&architectureStackFlag, "stack", "", "Only this stack (name or id) and its apps")
 	planCmd.Flags().BoolVar(&planBuildFlag, "build", false, "Carry the plan out straight away, after asking (with --yes, without asking)")
 	planCmd.Flags().BoolVar(&planYesFlag, "yes", false, "With --build: do not ask before building")
 	planCmd.Flags().BoolVar(&planJSONFlag, "json", false, "Print the plan as JSON (same as -o json)")
+	planCmd.Flags().StringVar(&planAppFlag, "app", "", "Plan inside one app (name or id)")
+	planCmd.Flags().StringVar(&planStackFlag, "stack", "", "Plan inside one stack (name or id)")
 	buildCmd.Flags().StringVar(&buildPlanFlag, "plan", "", "A plan file to build instead of the last plan (as `tael plan -o json` prints it)")
 	buildCmd.Flags().BoolVar(&buildYesFlag, "yes", false, "Do not ask before building")
+	buildCmd.Flags().StringVar(&buildAppFlag, "app", "", "Build inside one app (name or id)")
+	buildCmd.Flags().StringVar(&buildStackFlag, "stack", "", "Build inside one stack (name or id)")
 	rootCmd.AddCommand(architectureCmd, buildCmd)
 }
 
 // --- the picture ---
 
-// neighbourhood narrows the graph to one app and the nodes on its edges:
-// its address, the solutions it reads, the runtime it runs on.
-func neighbourhood(graph *client.ArchitectureGraph, word string) (*client.ArchitectureGraph, error) {
-	trimmed := strings.TrimSpace(word)
-	var app *client.ArchitectureNode
-	names := []string{}
-	for index := range graph.Nodes {
-		node := &graph.Nodes[index]
-		if node.Kind != client.ArchitectureKindApp {
-			continue
-		}
-		names = append(names, node.Title)
-		if app == nil && (strings.EqualFold(node.Title, trimmed) || node.ID == trimmed || node.ID == client.ArchitectureKindApp+":"+trimmed) {
-			app = node
-		}
+// resolveScopeFlags turns --app or --stack into the scope the API takes:
+// nothing for the whole workspace, one app, or one stack. Names resolve
+// the way they do everywhere else, and an unknown one lists what there is.
+func resolveScopeFlags(command *cobra.Command, appFlag string, stackFlag string) (string, error) {
+	if appFlag != "" && stackFlag != "" {
+		return "", withExitCode(exitUsage, fmt.Errorf("one scope at a time: --app or --stack, not both"))
 	}
-	if app == nil {
-		if len(names) == 0 {
-			return nil, withExitCode(exitUsage, fmt.Errorf("no apps in this workspace: run `tael init` to connect a repository"))
+	switch {
+	case appFlag != "":
+		appID, resolveError := resolveAppID(command.Context(), appFlag)
+		if resolveError != nil {
+			return "", resolveError
 		}
-		return nil, withExitCode(exitUsage, fmt.Errorf("no app called %q; apps: %s", trimmed, strings.Join(names, ", ")))
-	}
-	keep := map[string]bool{app.ID: true}
-	for _, edge := range graph.Edges {
-		switch app.ID {
-		case edge.From:
-			keep[edge.To] = true
-		case edge.To:
-			keep[edge.From] = true
+		return client.AppScope(appID), nil
+	case stackFlag != "":
+		stack, resolveError := resolveStackArgument(command.Context(), stackFlag)
+		if resolveError != nil {
+			return "", resolveError
 		}
+		return client.StackScope(stack.ID), nil
 	}
-	narrowed := &client.ArchitectureGraph{
-		Nodes: []client.ArchitectureNode{}, Edges: []client.ArchitectureEdge{}, Suggestions: []client.ArchitectureSuggestion{},
-		RuntimeServicesUnavailable: graph.RuntimeServicesUnavailable, GeneratedAt: graph.GeneratedAt,
-	}
+	return "", nil
+}
+
+// stackMembersFor names the apps inside each stack card, keyed by the
+// stack's node id. The graph folds members into their stack, so the stacks
+// list supplies the names; when it cannot be read the picture stands
+// without them.
+func stackMembersFor(requestContext context.Context, graph *client.ArchitectureGraph) map[string][]client.StackApp {
+	hasStacks := false
 	for _, node := range graph.Nodes {
-		if keep[node.ID] {
-			narrowed.Nodes = append(narrowed.Nodes, node)
+		if node.Kind == client.ArchitectureKindStack {
+			hasStacks = true
+			break
 		}
 	}
-	for _, edge := range graph.Edges {
-		if keep[edge.From] && keep[edge.To] {
-			narrowed.Edges = append(narrowed.Edges, edge)
-		}
+	if !hasStacks {
+		return nil
 	}
-	for _, suggestion := range graph.Suggestions {
-		if strings.Contains(strings.ToLower(suggestion.Prompt+" "+suggestion.Reason), strings.ToLower(app.Title)) {
-			narrowed.Suggestions = append(narrowed.Suggestions, suggestion)
-		}
+	listResponse, listError := apiClient.ListStacks(requestContext)
+	if listError != nil {
+		return nil
 	}
-	return narrowed, nil
+	members := make(map[string][]client.StackApp, len(listResponse.Stacks))
+	for _, stack := range listResponse.Stacks {
+		members[client.ArchitectureKindStack+":"+stack.ID] = stack.Apps
+	}
+	return members
 }
 
 // renderArchitecture draws the picture in text, one section per kind, each
 // node as its status, title and subtitle with its edges in words beneath.
-// Runtime services sit indented under the runtime.
-func renderArchitecture(graph *client.ArchitectureGraph) string {
+// Stack members sit indented under their stack, runtime services under the
+// runtime.
+func renderArchitecture(graph *client.ArchitectureGraph, stackMembers map[string][]client.StackApp) string {
 	titles := map[string]string{}
 	byKind := map[string][]client.ArchitectureNode{}
 	for _, node := range graph.Nodes {
@@ -192,7 +206,9 @@ func renderArchitecture(graph *client.ArchitectureGraph) string {
 		heading string
 		kind    string
 	}{
+		{"Repository", client.ArchitectureKindRepo},
 		{"Addresses", client.ArchitectureKindDomain},
+		{"Stacks", client.ArchitectureKindStack},
 		{"Apps", client.ArchitectureKindApp},
 		{"Solutions", client.ArchitectureKindSolution},
 	}
@@ -203,6 +219,10 @@ func renderArchitecture(graph *client.ArchitectureGraph) string {
 		}
 		builder.WriteString(section.heading + "\n")
 		for _, node := range nodes {
+			if section.kind == client.ArchitectureKindStack {
+				writeStackNode(&builder, node, graph.Stacks, stackMembers[node.ID], titles, outgoing[node.ID])
+				continue
+			}
 			writeArchitectureNode(&builder, node, "  ", titles, outgoing[node.ID])
 		}
 	}
@@ -222,6 +242,7 @@ func renderArchitecture(graph *client.ArchitectureGraph) string {
 	known := map[string]bool{
 		client.ArchitectureKindDomain: true, client.ArchitectureKindApp: true, client.ArchitectureKindSolution: true,
 		client.ArchitectureKindRuntime: true, client.ArchitectureKindService: true,
+		client.ArchitectureKindStack: true, client.ArchitectureKindRepo: true,
 	}
 	others := []client.ArchitectureNode{}
 	for _, node := range graph.Nodes {
@@ -247,6 +268,28 @@ func renderArchitecture(graph *client.ArchitectureGraph) string {
 		builder.WriteString("Ask for one with `tael plan \"<suggestion>\"`.\n")
 	}
 	return builder.String()
+}
+
+// writeStackNode writes a stack's composite row — its health, its name and
+// how many apps it holds — with the member apps indented beneath, the way
+// services sit under the runtime.
+func writeStackNode(builder *strings.Builder, node client.ArchitectureNode, summaries []client.ArchitectureStackSummary, members []client.StackApp, titles map[string]string, edges []client.ArchitectureEdge) {
+	if strings.TrimSpace(node.Subtitle) == "" {
+		for _, summary := range summaries {
+			if node.ID == client.ArchitectureKindStack+":"+summary.ID || node.ID == summary.ID {
+				node.Subtitle = plural(summary.AppCount, "app", "apps")
+				break
+			}
+		}
+	}
+	writeArchitectureNode(builder, node, "  ", titles, edges)
+	for _, member := range members {
+		if strings.TrimSpace(member.Status) == "" {
+			builder.WriteString("    " + member.Name + "\n")
+			continue
+		}
+		fmt.Fprintf(builder, "    %s %s  %s\n", toneDot(member.Tone), strings.ReplaceAll(member.Status, "_", " "), member.Name)
+	}
 }
 
 // writeArchitectureNode writes one node line and its edges in words.
@@ -303,6 +346,11 @@ func edgeWords(edge client.ArchitectureEdge, titles map[string]string) string {
 		words = "runs on " + target
 	case client.ArchitectureEdgeRequires:
 		words = "requires " + target
+	case client.ArchitectureEdgeCalls:
+		words = "calls " + target
+		if edge.Label != "" {
+			words += " (" + edge.Label + ")"
+		}
 	default:
 		words = strings.ReplaceAll(edge.Kind, "_", " ") + " " + target
 	}
@@ -324,7 +372,11 @@ func runArchitecturePlan(command *cobra.Command, args []string) error {
 	if prompt == "" {
 		return withExitCode(exitUsage, fmt.Errorf("say what you would like to change: tael plan \"<sentence>\""))
 	}
-	plan, planError := apiClient.PlanArchitecture(command.Context(), prompt)
+	scope, scopeError := resolveScopeFlags(command, planAppFlag, planStackFlag)
+	if scopeError != nil {
+		return scopeError
+	}
+	plan, planError := apiClient.PlanArchitecture(command.Context(), prompt, scope)
 	if planError != nil {
 		return planError
 	}
@@ -345,7 +397,7 @@ func runArchitecturePlan(command *cobra.Command, args []string) error {
 	if !asJSON {
 		fmt.Fprint(command.OutOrStdout(), renderArchitecturePlan(plan, false))
 	}
-	outcome, buildError := buildChanges(command, plan.Changes, planYesFlag, asJSON)
+	outcome, buildError := buildChanges(command, plan.Changes, planYesFlag, asJSON, scope)
 	if asJSON {
 		if encodeError := writeJSON(command, map[string]any{"plan": plan, "build": outcome}); encodeError != nil {
 			return encodeError
@@ -417,10 +469,11 @@ var stdinIsTerminal = func() bool {
 }
 
 // buildChanges carries the changes out: blocked ones are skipped, the rest
-// are confirmed (on a terminal, unless yes) and sent. In text mode it
-// prints one line per change applied and per refusal. The outcome comes
-// back for a JSON caller, alongside the error a refusal exits with.
-func buildChanges(command *cobra.Command, changes []client.ArchitectureChange, yes bool, asJSON bool) (*client.ArchitectureOutcome, error) {
+// are confirmed (on a terminal, unless yes) and sent, within the scope when
+// one is given. In text mode it prints one line per change applied and per
+// refusal. The outcome comes back for a JSON caller, alongside the error a
+// refusal exits with.
+func buildChanges(command *cobra.Command, changes []client.ArchitectureChange, yes bool, asJSON bool, scope string) (*client.ArchitectureOutcome, error) {
 	out := command.OutOrStdout()
 	ready := []client.ArchitectureChange{}
 	skipped := 0
@@ -460,7 +513,7 @@ func buildChanges(command *cobra.Command, changes []client.ArchitectureChange, y
 			return &client.ArchitectureOutcome{Applied: []client.ArchitectureApplied{}, Refused: []client.ArchitectureRefused{}}, nil
 		}
 	}
-	outcome, applyError := apiClient.ApplyArchitecture(command.Context(), ready)
+	outcome, applyError := apiClient.ApplyArchitecture(command.Context(), ready, scope)
 	if applyError != nil {
 		return nil, applyError
 	}
@@ -506,6 +559,7 @@ func confirm(in io.Reader, out io.Writer, question string) (bool, error) {
 func progressive(title string) string {
 	verbs := []struct{ prefix, doing string }{
 		{"Add ", "Adding "}, {"Connect ", "Connecting "}, {"Remove ", "Removing "}, {"Move ", "Moving "},
+		{"Group ", "Grouping "}, {"Link ", "Linking "}, {"Create ", "Creating "},
 	}
 	for _, verb := range verbs {
 		if strings.HasPrefix(title, verb.prefix) {

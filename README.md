@@ -152,16 +152,37 @@ build that carries it out. Nothing runs until you say `tael build`.
 
 | Command             | Description                                                    |
 | ------------------- | -------------------------------------------------------------- |
-| `tael architecture [--app <app>]` | The picture in text: addresses, apps, solutions and the runtime, each with what it connects to, then Tael's suggestions; `--app` narrows it to one app and what it touches |
-| `tael plan "<what you want>" [--json]` | Ask Tael to plan a change in your words: the summary, the changes as numbered rows (with why one is blocked), any questions; kept as the last plan |
+| `tael architecture [--app <app> \| --stack <stack>]` | The picture in text: addresses, stacks, apps, solutions and the runtime, each with what it connects to, then Tael's suggestions; `--app` narrows it to one app — its repository, addresses, solutions and the apps it calls — and `--stack` to one stack's apps |
+| `tael plan "<what you want>" [--app <app> \| --stack <stack>] [--json]` | Ask Tael to plan a change in your words: the summary, the changes as numbered rows (with why one is blocked), any questions; kept as the last plan. `--app`/`--stack` scope the plan to that slice of the workspace |
 | `tael plan "<what you want>" --build [--yes]` | Plan and build in one go, after the same question |
-| `tael build [--plan <file>] [--yes]` | Carry out the last plan (or the file given): shows the changes, asks on a terminal unless `--yes`, then says what is happening for each; blocked changes are skipped, refusals are said in a sentence and exit 1 |
+| `tael build [--plan <file>] [--app <app> \| --stack <stack>] [--yes]` | Carry out the last plan (or the file given): shows the changes, asks on a terminal unless `--yes`, then says what is happening for each; blocked changes are skipped, refusals are said in a sentence and exit 1 |
 
 `tael plan` keeps the plan at `~/.tael/last-plan.json` (beside the config
 file when `TAEL_CONFIG` names one); `tael build --plan` also reads what
 `tael plan -o json` printed. Without a terminal and without `--yes`,
 `tael build` refuses (exit 2) rather than guess. On a deployment with no
 model to plan with, `tael plan` says so and exits 1.
+
+#### Stacks and links
+
+A stack is a named group of apps that ship together; an app belongs to at
+most one. The workspace picture shows each stack as one row with its apps
+indented beneath, and apps outside any stack exactly as before. A link
+declares that one app calls another — a line the picture draws and the
+planner reads; nothing runs because of it.
+
+| Command             | Description                                                    |
+| ------------------- | -------------------------------------------------------------- |
+| `tael stacks`       | List the stacks: name, app count, members                      |
+| `tael stack new <name> [--app <app> ...]` | Make a stack, with apps in it from the start (`--app` repeats) |
+| `tael stack move <app> <stack>` | Move an app into a stack; `tael stack move <app> --none` puts it on its own again |
+| `tael stack rename <stack> <name>` | Give a stack a new name                         |
+| `tael stack remove <stack> [--yes]` | Remove a stack; its apps stay, ungrouped (asks on a terminal unless `--yes`) |
+| `tael link <from-app> <to-app> [--label <text>]` | Say one app calls another, with how in a word (REST, gRPC, a queue) |
+| `tael unlink <from-app> <to-app>` | Take that back                                   |
+
+Stacks and apps are named the way `[app]` arguments are everywhere else:
+by name or by id, and an unknown one answers with what there is.
 
 ### What stays in the browser
 

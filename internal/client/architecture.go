@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 )
 
 // The architecture studio: the workspace as one picture — the runtime, the
@@ -19,6 +20,8 @@ const (
 	ArchitectureKindSolution = "solution"
 	ArchitectureKindDomain   = "domain"
 	ArchitectureKindService  = "service"
+	ArchitectureKindStack    = "stack"
+	ArchitectureKindRepo     = "repo"
 )
 
 // Edge kinds in the picture.
@@ -27,6 +30,7 @@ const (
 	ArchitectureEdgeReads    = "reads"
 	ArchitectureEdgeRunsOn   = "runs_on"
 	ArchitectureEdgeRequires = "requires"
+	ArchitectureEdgeCalls    = "calls"
 )
 
 // Change kinds a plan proposes.
@@ -34,7 +38,17 @@ const (
 	ChangeAddSolution = "add_solution"
 	ChangeConnect     = "connect"
 	ChangeNewApp      = "new_app"
+	ChangeCreateStack = "create_stack"
+	ChangeMoveApp     = "move_app"
+	ChangeLinkApps    = "link_apps"
 )
+
+// AppScope and StackScope write the scope the architecture and plan APIs
+// take: the whole workspace when empty, one stack, or one app.
+func AppScope(appID string) string { return ArchitectureKindApp + ":" + appID }
+
+// StackScope narrows the picture to one stack's apps.
+func StackScope(stackID string) string { return ArchitectureKindStack + ":" + stackID }
 
 // ArchitectureRuntimeNodeID is the one runtime node every workspace has.
 const ArchitectureRuntimeNodeID = "runtime"
@@ -85,11 +99,29 @@ type ArchitectureSuggestion struct {
 	Reason string `json:"reason"`
 }
 
-// ArchitectureGraph is the workspace as served.
+// ArchitectureScope says which slice of the workspace the graph shows:
+// the whole workspace, one stack, or one app.
+type ArchitectureScope struct {
+	Kind  string `json:"kind"`
+	ID    string `json:"id,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+// ArchitectureStackSummary is one stack the picture could narrow to.
+type ArchitectureStackSummary struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	AppCount int    `json:"app_count"`
+}
+
+// ArchitectureGraph is the workspace as served. Scope and Stacks arrived
+// with stacks; a graph without them still decodes, they stay empty.
 type ArchitectureGraph struct {
-	Nodes       []ArchitectureNode       `json:"nodes"`
-	Edges       []ArchitectureEdge       `json:"edges"`
-	Suggestions []ArchitectureSuggestion `json:"suggestions"`
+	Nodes       []ArchitectureNode         `json:"nodes"`
+	Edges       []ArchitectureEdge         `json:"edges"`
+	Suggestions []ArchitectureSuggestion   `json:"suggestions"`
+	Scope       *ArchitectureScope         `json:"scope,omitempty"`
+	Stacks      []ArchitectureStackSummary `json:"stacks,omitempty"`
 	// RuntimeServicesUnavailable says the runtime did not answer when asked
 	// what it carries; the rest of the picture stands.
 	RuntimeServicesUnavailable bool   `json:"runtime_services_unavailable,omitempty"`
@@ -115,8 +147,16 @@ type ArchitectureChange struct {
 	AppID       string `json:"app_id,omitempty"`
 	Repo        string `json:"repo,omitempty"`
 	Branch      string `json:"branch,omitempty"`
-	Title       string `json:"title"`
-	Detail      string `json:"detail"`
+	// The stack change kinds carry these; they ride along untouched so a
+	// kept plan builds the same as a fresh one.
+	StackID   string   `json:"stack_id,omitempty"`
+	StackName string   `json:"stack_name,omitempty"`
+	AppIDs    []string `json:"app_ids,omitempty"`
+	FromAppID string   `json:"from_app_id,omitempty"`
+	ToAppID   string   `json:"to_app_id,omitempty"`
+	Label     string   `json:"label,omitempty"`
+	Title     string   `json:"title"`
+	Detail    string   `json:"detail"`
 	// Blocked says why the change cannot be applied as things stand
 	// ("Available on Launch"); the change is still shown.
 	Blocked string `json:"blocked,omitempty"`
@@ -166,21 +206,30 @@ var ErrPlanningUnavailable = errors.New("Tael cannot plan changes on this deploy
 
 const architecturePath = "/api/v1/architecture"
 
-// GetArchitecture reads the workspace as a picture.
-func (client *Client) GetArchitecture(requestContext context.Context) (*ArchitectureGraph, error) {
+// GetArchitecture reads the workspace as a picture. An empty scope is the
+// whole workspace; AppScope and StackScope narrow it.
+func (client *Client) GetArchitecture(requestContext context.Context, scope string) (*ArchitectureGraph, error) {
+	path := architecturePath
+	if scope != "" {
+		path += "?scope=" + url.QueryEscape(scope)
+	}
 	var graph ArchitectureGraph
-	if requestError := client.doJSON(requestContext, http.MethodGet, architecturePath, nil, &graph); requestError != nil {
+	if requestError := client.doJSON(requestContext, http.MethodGet, path, nil, &graph); requestError != nil {
 		return nil, requestError
 	}
 	return &graph, nil
 }
 
 // PlanArchitecture asks Tael for the smallest set of changes that does what
-// the sentence asks. 501 becomes ErrPlanningUnavailable; 502 carries a
-// sentence in Tael's words when the model did not answer.
-func (client *Client) PlanArchitecture(requestContext context.Context, prompt string) (*ArchitecturePlan, error) {
+// the sentence asks, within the scope when one is given. 501 becomes
+// ErrPlanningUnavailable; 502 carries a sentence in Tael's words when the
+// model did not answer.
+func (client *Client) PlanArchitecture(requestContext context.Context, prompt string, scope string) (*ArchitecturePlan, error) {
 	var plan ArchitecturePlan
 	body := map[string]string{"prompt": prompt}
+	if scope != "" {
+		body["scope"] = scope
+	}
 	if requestError := client.doJSON(requestContext, http.MethodPost, architecturePath+"/plan", body, &plan); requestError != nil {
 		var apiError *APIError
 		if errors.As(requestError, &apiError) && apiError.StatusCode == http.StatusNotImplemented {
@@ -191,13 +240,48 @@ func (client *Client) PlanArchitecture(requestContext context.Context, prompt st
 	return &plan, nil
 }
 
-// ApplyArchitecture carries the changes out in order. What was refused, and
-// why, comes back in the outcome rather than as an error.
-func (client *Client) ApplyArchitecture(requestContext context.Context, changes []ArchitectureChange) (*ArchitectureOutcome, error) {
+// ApplyArchitecture carries the changes out in order, within the scope when
+// one is given. What was refused, and why, comes back in the outcome rather
+// than as an error.
+func (client *Client) ApplyArchitecture(requestContext context.Context, changes []ArchitectureChange, scope string) (*ArchitectureOutcome, error) {
 	var outcome ArchitectureOutcome
-	body := map[string][]ArchitectureChange{"changes": changes}
+	body := map[string]any{"changes": changes}
+	if scope != "" {
+		body["scope"] = scope
+	}
 	if requestError := client.doJSON(requestContext, http.MethodPost, architecturePath+"/apply", body, &outcome); requestError != nil {
 		return nil, requestError
 	}
 	return &outcome, nil
+}
+
+// ArchitectureLink is one declared call between two apps: documentation the
+// picture draws and the planner reads, nothing that runs.
+type ArchitectureLink struct {
+	ID        string `json:"id,omitempty"`
+	FromAppID string `json:"from_app_id"`
+	ToAppID   string `json:"to_app_id"`
+	Label     string `json:"label,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// CreateArchitectureLink declares that one app calls another. The API
+// answers 409 when the link already exists and 422 when an app is unknown
+// or would call itself.
+func (client *Client) CreateArchitectureLink(requestContext context.Context, fromAppID string, toAppID string, label string) (*ArchitectureLink, error) {
+	body := map[string]string{"from_app_id": fromAppID, "to_app_id": toAppID}
+	if label != "" {
+		body["label"] = label
+	}
+	var link ArchitectureLink
+	if requestError := client.doJSON(requestContext, http.MethodPost, architecturePath+"/links", body, &link); requestError != nil {
+		return nil, requestError
+	}
+	return &link, nil
+}
+
+// DeleteArchitectureLink takes a declared call back.
+func (client *Client) DeleteArchitectureLink(requestContext context.Context, fromAppID string, toAppID string) error {
+	body := map[string]string{"from_app_id": fromAppID, "to_app_id": toAppID}
+	return client.doJSON(requestContext, http.MethodDelete, architecturePath+"/links", body, nil)
 }

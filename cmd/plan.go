@@ -14,18 +14,19 @@ import (
 // one it shows the workspace's plan: the tier, what it holds, the runtime
 // and any coupon in force.
 var planCmd = &cobra.Command{
-	Use:   "plan [\"<what you want>\"] [--build] [--yes]",
+	Use:   "plan [\"<what you want>\"] [--app <app> | --stack <stack>] [--build] [--yes]",
 	Short: "Ask Tael to plan a change in your words; alone, the workspace's plan and coupon",
 	Long: `With a sentence, ask Tael to plan a change: "Add a database for web",
 "Connect api to the object storage". Tael answers with the changes it
 would make, kept as the last plan for ` + "`tael build`" + `; nothing runs until
-you say so. --build carries the plan out straight away, after asking.
+you say so. --app or --stack scopes the plan to that slice of the
+workspace. --build carries the plan out straight away, after asking.
 
 Without a sentence, the workspace's plan: the tier, what it holds, the
 runtime, and any coupon in force.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(command *cobra.Command, args []string) error {
-		if len(args) > 0 || planBuildFlag {
+		if len(args) > 0 || planBuildFlag || planAppFlag != "" || planStackFlag != "" {
 			return runArchitecturePlan(command, args)
 		}
 		status, statusError := apiClient.GetWorkspaceStatus(command.Context())

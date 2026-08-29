@@ -82,7 +82,9 @@ func newAPIServer(t *testing.T, routes ...route) (*httptest.Server, *[]recordedR
 		*recorded = append(*recorded, recordedRequest{Method: request.Method, Path: request.URL.RequestURI(), Body: string(body), Headers: request.Header.Clone()})
 		writer.Header().Set("Content-Type", "application/json")
 		for _, candidate := range routes {
-			if candidate.method == request.Method && candidate.path == request.URL.Path {
+			// A route may name just the path, or the full request URI when a
+			// test serves different answers per query (?scope=...).
+			if candidate.method == request.Method && (candidate.path == request.URL.RequestURI() || candidate.path == request.URL.Path) {
 				writer.WriteHeader(candidate.status)
 				_, _ = writer.Write([]byte(candidate.body))
 				return
@@ -137,8 +139,10 @@ func mustContain(t *testing.T, output string, wants ...string) {
 }
 
 // platformWords are what the product never says; every rendered text is
-// checked against them.
-var platformWords = []string{"ankra", "stack", "profile", "helm", "cluster", "operation"}
+// checked against them. "Stack" is Tael's own noun since Architecture
+// Studio 2.0 — a named group of apps — so only the platform's "profile"
+// stays banned.
+var platformWords = []string{"ankra", "profile", "helm", "cluster", "operation"}
 
 func mustSpeakTael(t *testing.T, output string) {
 	t.Helper()

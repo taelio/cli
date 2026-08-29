@@ -41,7 +41,7 @@ const architectureGraphJSON = `{
 }`
 
 func TestArchitecture(t *testing.T) {
-	server, _ := newAPIServer(t, route{http.MethodGet, "/api/v1/architecture", http.StatusOK, architectureGraphJSON})
+	server, recorded := newAPIServer(t, route{http.MethodGet, "/api/v1/architecture", http.StatusOK, architectureGraphJSON})
 	output, runError := runCommand(t, server, "architecture")
 	if runError != nil {
 		t.Fatalf("tael architecture: %v", runError)
@@ -77,28 +77,8 @@ func TestArchitecture(t *testing.T) {
 		t.Errorf("tael architecture output:\n%s\nwant:\n%s", output, want)
 	}
 	mustSpeakTael(t, output)
-
-	// --app keeps the app and what its edges reach, nothing else.
-	output, appError := runCommand(t, server, "architecture", "--app", "website-demo")
-	if appError != nil {
-		t.Fatalf("tael architecture --app: %v", appError)
-	}
-	mustContain(t, output,
-		"  ● live  website-demo.tael.site — Included address\n",
-		"  ● live  website-demo — taelio/website-demo · Next.js\n",
-		"  ● ready  Tael Managed Postgres for website-demo — Small · for website-demo\n",
-		"  ● ready  Dedicated machine — Hetzner · ready\n",
-	)
-	for _, absent := range []string{"api —", "Backups", "Object Storage", "Networking", "Monitoring"} {
-		if strings.Contains(output, absent) {
-			t.Errorf("--app website-demo still shows %q:\n%s", absent, output)
-		}
-	}
-	mustSpeakTael(t, output)
-
-	_, unknown := runCommand(t, server, "architecture", "--app", "nothing")
-	if unknown == nil || exitCodeFor(unknown) != exitUsage || !strings.Contains(unknown.Error(), "apps: website-demo, api") {
-		t.Fatalf("tael architecture --app nothing = %v, want a usage error listing the apps", unknown)
+	if request := lastRequest(recorded, http.MethodGet, "/api/v1/architecture"); request == nil || strings.Contains(request.Path, "scope") {
+		t.Fatalf("the workspace picture must be asked for without a scope; sent %+v", request)
 	}
 
 	output, jsonError := runCommand(t, server, "architecture", "-o", "json")
@@ -108,6 +88,204 @@ func TestArchitecture(t *testing.T) {
 	var graph client.ArchitectureGraph
 	if unmarshalError := json.Unmarshal([]byte(output), &graph); unmarshalError != nil || len(graph.Nodes) != 8 || len(graph.Edges) != 8 || graph.GeneratedAt != "2026-08-29T10:00:00Z" {
 		t.Fatalf("tael architecture -o json = %q, %v", output, unmarshalError)
+	}
+}
+
+const appsForResolutionJSON = `{"apps":[
+  {"id":"app_1","name":"website-demo","status":"live"},
+  {"id":"app_2","name":"api","status":"awaiting_review"}
+]}`
+
+const stacksListJSON = `{"stacks":[
+  {"id":"st_1","name":"checkout","apps":[
+    {"id":"app_1","name":"website-demo","status":"live","tone":"live"},
+    {"id":"app_2","name":"api","status":"awaiting_review","tone":"warning"},
+    {"id":"app_5","name":"worker","status":"live","tone":"live"}
+  ]}
+]}`
+
+// The workspace picture with stacks: each stack is one row with its apps
+// indented beneath, ungrouped apps stand as before, and a declared call is
+// a line under the app that makes it.
+func TestArchitectureWithStacks(t *testing.T) {
+	graphJSON := `{
+	  "nodes": [
+	    {"id":"runtime","kind":"runtime","title":"Dedicated machine","subtitle":"Hetzner · ready","status":"ready","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"stack:st_1","kind":"stack","title":"checkout","subtitle":"","status":"healthy","tone":"live","group":null,"href":"/architecture/stacks/st_1","facts":[{"label":"Apps","value":"3"}],"actions":[]},
+	    {"id":"app:app_3","kind":"app","title":"admin","subtitle":"taelio/admin · Next.js","status":"live","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"app:app_4","kind":"app","title":"cron","subtitle":"taelio/cron · Go","status":"live","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"solution:sol_1","kind":"solution","title":"Tael Managed Postgres","subtitle":"Small","status":"ready","tone":"live","group":null,"facts":[],"actions":[]}
+	  ],
+	  "edges": [
+	    {"from":"stack:st_1","to":"solution:sol_1","kind":"reads"},
+	    {"from":"stack:st_1","to":"runtime","kind":"runs_on"},
+	    {"from":"app:app_3","to":"runtime","kind":"runs_on"},
+	    {"from":"app:app_3","to":"app:app_4","kind":"calls"},
+	    {"from":"app:app_4","to":"runtime","kind":"runs_on"},
+	    {"from":"solution:sol_1","to":"runtime","kind":"runs_on"}
+	  ],
+	  "suggestions": [],
+	  "scope": {"kind":"workspace"},
+	  "stacks": [{"id":"st_1","name":"checkout","app_count":3}],
+	  "generated_at": "2026-08-30T10:00:00Z"
+	}`
+	server, _ := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/architecture", http.StatusOK, graphJSON},
+		route{http.MethodGet, "/api/v1/stacks", http.StatusOK, stacksListJSON},
+	)
+	output, runError := runCommand(t, server, "architecture")
+	if runError != nil {
+		t.Fatalf("tael architecture: %v", runError)
+	}
+	want := strings.Join([]string{
+		"Stacks",
+		"  ● healthy  checkout — 3 apps",
+		"      reads from Tael Managed Postgres",
+		"      runs on Dedicated machine",
+		"    ● live  website-demo",
+		"    ▲ awaiting review  api",
+		"    ● live  worker",
+		"Apps",
+		"  ● live  admin — taelio/admin · Next.js",
+		"      runs on Dedicated machine",
+		"      calls cron",
+		"  ● live  cron — taelio/cron · Go",
+		"      runs on Dedicated machine",
+		"Solutions",
+		"  ● ready  Tael Managed Postgres — Small",
+		"      runs on Dedicated machine",
+		"Runtime",
+		"  ● ready  Dedicated machine — Hetzner · ready",
+		"",
+	}, "\n")
+	if output != want {
+		t.Errorf("tael architecture with stacks:\n%s\nwant:\n%s", output, want)
+	}
+	mustSpeakTael(t, output)
+
+	// When the stacks list cannot be read the picture stands, member names
+	// aside.
+	quiet, _ := newAPIServer(t, route{http.MethodGet, "/api/v1/architecture", http.StatusOK, graphJSON})
+	output, quietError := runCommand(t, quiet, "architecture")
+	if quietError != nil {
+		t.Fatalf("tael architecture without the stacks list: %v", quietError)
+	}
+	mustContain(t, output, "  ● healthy  checkout — 3 apps\n")
+	if strings.Contains(output, "worker") {
+		t.Errorf("member names should be absent when the stacks list is unavailable:\n%s", output)
+	}
+	mustSpeakTael(t, output)
+}
+
+// --app asks the API for that app's slice of the picture: its repository,
+// addresses, solutions and the apps it calls.
+func TestArchitectureScopedToApp(t *testing.T) {
+	appGraphJSON := `{
+	  "nodes": [
+	    {"id":"repo:app_1","kind":"repo","title":"taelio/website-demo","subtitle":"main · built 2m ago","status":"connected","tone":"live","group":null,"href":"https://github.com/taelio/website-demo","facts":[],"actions":[]},
+	    {"id":"app:app_1","kind":"app","title":"website-demo","subtitle":"taelio/website-demo · Next.js","status":"live","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"domain:website-demo.tael.site","kind":"domain","title":"website-demo.tael.site","subtitle":"Included address","status":"live","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"app:app_2","kind":"app","title":"api","subtitle":"taelio/api · Go","status":"awaiting_review","tone":"warning","group":null,"facts":[],"actions":[]},
+	    {"id":"solution:sol_1","kind":"solution","title":"Tael Managed Postgres","subtitle":"Small","status":"ready","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"runtime","kind":"runtime","title":"Dedicated machine","subtitle":"Hetzner · ready","status":"ready","tone":"live","group":null,"facts":[],"actions":[]}
+	  ],
+	  "edges": [
+	    {"from":"repo:app_1","to":"app:app_1","kind":"builds"},
+	    {"from":"domain:website-demo.tael.site","to":"app:app_1","kind":"routes"},
+	    {"from":"app:app_1","to":"runtime","kind":"runs_on"},
+	    {"from":"app:app_1","to":"solution:sol_1","kind":"reads","label":"DATABASE_URL"},
+	    {"from":"app:app_1","to":"app:app_2","kind":"calls","label":"REST"}
+	  ],
+	  "suggestions": [],
+	  "scope": {"kind":"app","id":"app_1","title":"website-demo"},
+	  "stacks": [],
+	  "generated_at": "2026-08-30T10:00:00Z"
+	}`
+	server, recorded := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/architecture?scope=app%3Aapp_1", http.StatusOK, appGraphJSON},
+		route{http.MethodGet, "/api/v1/apps", http.StatusOK, appsForResolutionJSON},
+	)
+	output, runError := runCommand(t, server, "architecture", "--app", "website-demo")
+	if runError != nil {
+		t.Fatalf("tael architecture --app: %v", runError)
+	}
+	want := strings.Join([]string{
+		"Repository",
+		"  ● connected  taelio/website-demo — main · built 2m ago",
+		"      builds website-demo",
+		"Addresses",
+		"  ● live  website-demo.tael.site — Included address",
+		"      routes to website-demo",
+		"Apps",
+		"  ● live  website-demo — taelio/website-demo · Next.js",
+		"      runs on Dedicated machine",
+		"      reads DATABASE_URL from Tael Managed Postgres",
+		"      calls api (REST)",
+		"  ▲ awaiting review  api — taelio/api · Go",
+		"Solutions",
+		"  ● ready  Tael Managed Postgres — Small",
+		"Runtime",
+		"  ● ready  Dedicated machine — Hetzner · ready",
+		"",
+	}, "\n")
+	if output != want {
+		t.Errorf("tael architecture --app:\n%s\nwant:\n%s", output, want)
+	}
+	mustSpeakTael(t, output)
+	if request := lastRequest(recorded, http.MethodGet, "/api/v1/architecture"); request == nil || request.Path != "/api/v1/architecture?scope=app%3Aapp_1" {
+		t.Fatalf("scoped request = %+v, want ?scope=app:app_1", request)
+	}
+
+	_, unknown := runCommand(t, server, "architecture", "--app", "nothing")
+	if unknown == nil || exitCodeFor(unknown) != exitUsage || !strings.Contains(unknown.Error(), "apps: website-demo, api") {
+		t.Fatalf("tael architecture --app nothing = %v, want a usage error listing the apps", unknown)
+	}
+}
+
+// --stack asks the API for one stack's slice; the stack is named the way
+// apps are, and the two scopes do not combine.
+func TestArchitectureScopedToStack(t *testing.T) {
+	stackGraphJSON := `{
+	  "nodes": [
+	    {"id":"app:app_1","kind":"app","title":"website-demo","subtitle":"taelio/website-demo · Next.js","status":"live","tone":"live","group":null,"facts":[],"actions":[]},
+	    {"id":"app:app_2","kind":"app","title":"api","subtitle":"taelio/api · Go","status":"awaiting_review","tone":"warning","group":null,"facts":[],"actions":[]},
+	    {"id":"runtime","kind":"runtime","title":"Dedicated machine","subtitle":"Hetzner · ready","status":"ready","tone":"live","group":null,"facts":[],"actions":[]}
+	  ],
+	  "edges": [
+	    {"from":"app:app_1","to":"app:app_2","kind":"calls"},
+	    {"from":"app:app_1","to":"runtime","kind":"runs_on"},
+	    {"from":"app:app_2","to":"runtime","kind":"runs_on"}
+	  ],
+	  "suggestions": [],
+	  "scope": {"kind":"stack","id":"st_1","title":"checkout"},
+	  "stacks": [{"id":"st_1","name":"checkout","app_count":3}],
+	  "generated_at": "2026-08-30T10:00:00Z"
+	}`
+	server, recorded := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/architecture?scope=stack%3Ast_1", http.StatusOK, stackGraphJSON},
+		route{http.MethodGet, "/api/v1/stacks", http.StatusOK, stacksListJSON},
+	)
+	output, runError := runCommand(t, server, "architecture", "--stack", "checkout")
+	if runError != nil {
+		t.Fatalf("tael architecture --stack: %v", runError)
+	}
+	mustContain(t, output,
+		"Apps\n  ● live  website-demo — taelio/website-demo · Next.js\n      calls api\n",
+		"Runtime\n  ● ready  Dedicated machine — Hetzner · ready\n",
+	)
+	mustSpeakTael(t, output)
+	if request := lastRequest(recorded, http.MethodGet, "/api/v1/architecture"); request == nil || request.Path != "/api/v1/architecture?scope=stack%3Ast_1" {
+		t.Fatalf("scoped request = %+v, want ?scope=stack:st_1", request)
+	}
+
+	_, unknown := runCommand(t, server, "architecture", "--stack", "nothing")
+	if unknown == nil || exitCodeFor(unknown) != exitUsage || !strings.Contains(unknown.Error(), "stacks: checkout") {
+		t.Fatalf("tael architecture --stack nothing = %v, want a usage error listing the stacks", unknown)
+	}
+
+	_, both := runCommand(t, server, "architecture", "--app", "website-demo", "--stack", "checkout")
+	if both == nil || exitCodeFor(both) != exitUsage || !strings.Contains(both.Error(), "one scope at a time") {
+		t.Fatalf("tael architecture with both scopes = %v, want a usage error", both)
 	}
 }
 
@@ -415,5 +593,64 @@ func TestPlanBuild(t *testing.T) {
 	output, workspaceError := runCommand(t, workspace, "plan")
 	if workspaceError != nil || !strings.HasPrefix(output, "Plan:      launch\n") {
 		t.Fatalf("tael plan alone = %q, %v", output, workspaceError)
+	}
+}
+
+// --app and --stack scope what Tael plans and builds: the scope rides in
+// the plan request, and again when the changes are applied.
+func TestPlanAndBuildScope(t *testing.T) {
+	setTerminal(t, false)
+	configPath := filepath.Join(t.TempDir(), "tael.yaml")
+	server, recorded := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/apps", http.StatusOK, appsForResolutionJSON},
+		route{http.MethodGet, "/api/v1/stacks", http.StatusOK, stacksListJSON},
+		route{http.MethodPost, "/api/v1/architecture/plan", http.StatusOK, architecturePlanJSON},
+		route{http.MethodPost, "/api/v1/architecture/apply", http.StatusOK,
+			`{"applied":[{"change":{"kind":"add_solution","solution_key":"postgres","preset":"small","app_id":"app_1","title":"Add Tael Managed Postgres for website-demo","detail":"A database made for website-demo."},"id":"sol_9","operation_id":"op_9"},{"change":{"kind":"new_app","repo":"taelio/api","branch":"main","title":"Connect taelio/api","detail":"Tael reads the repository."},"id":"app_3","operation_id":"op_11"}],"refused":[]}`},
+	)
+
+	output, planError := runCommandKeepingConfig(t, server, configPath, "plan", "Add a database", "--app", "website-demo")
+	if planError != nil {
+		t.Fatalf("tael plan --app: %v", planError)
+	}
+	mustContain(t, output, "Nothing runs until you say `tael build`.\n")
+	mustSpeakTael(t, output)
+	planBody := decodeBody(t, lastRequest(recorded, http.MethodPost, "/api/v1/architecture/plan"))
+	if planBody["prompt"] != "Add a database" || planBody["scope"] != "app:app_1" {
+		t.Fatalf("plan body = %v, want the app scope", planBody)
+	}
+
+	output, buildError := runCommandKeepingConfig(t, server, configPath, "build", "--stack", "checkout", "--yes")
+	if buildError != nil {
+		t.Fatalf("tael build --stack: %v\n%s", buildError, output)
+	}
+	mustSpeakTael(t, output)
+	applyBody := decodeBody(t, lastRequest(recorded, http.MethodPost, "/api/v1/architecture/apply"))
+	if applyBody["scope"] != "stack:st_1" {
+		t.Fatalf("apply body = %v, want the stack scope", applyBody)
+	}
+
+	// A stack scope on the plan resolves the same way.
+	if _, stackPlanError := runCommandKeepingConfig(t, server, configPath, "plan", "Tidy this stack", "--stack", "checkout"); stackPlanError != nil {
+		t.Fatalf("tael plan --stack: %v", stackPlanError)
+	}
+	if planBody := decodeBody(t, lastRequest(recorded, http.MethodPost, "/api/v1/architecture/plan")); planBody["scope"] != "stack:st_1" {
+		t.Fatalf("plan body = %v, want the stack scope", planBody)
+	}
+
+	_, both := runCommand(t, server, "plan", "Add a database", "--app", "website-demo", "--stack", "checkout")
+	if both == nil || exitCodeFor(both) != exitUsage || !strings.Contains(both.Error(), "one scope at a time") {
+		t.Fatalf("tael plan with both scopes = %v, want a usage error", both)
+	}
+
+	_, unknown := runCommand(t, server, "plan", "Add a database", "--stack", "nothing")
+	if unknown == nil || exitCodeFor(unknown) != exitUsage || !strings.Contains(unknown.Error(), "stacks: checkout") {
+		t.Fatalf("tael plan --stack nothing = %v, want a usage error listing the stacks", unknown)
+	}
+
+	// A scope without a sentence is not the workspace plan; it asks for one.
+	_, silent := runCommand(t, server, "plan", "--app", "website-demo")
+	if silent == nil || exitCodeFor(silent) != exitUsage || !strings.Contains(silent.Error(), "say what you would like to change") {
+		t.Fatalf("tael plan --app without a sentence = %v, want a usage error", silent)
 	}
 }

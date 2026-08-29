@@ -127,6 +127,11 @@ func (client *Client) doJSON(requestContext context.Context, method string, path
 	if target == nil {
 		return nil
 	}
+	// A success with no body (a 204, or a 201 that answers with nothing)
+	// leaves the target as its zero value rather than failing to parse.
+	if len(bytes.TrimSpace(responseBody)) == 0 {
+		return nil
+	}
 	if unmarshalError := json.Unmarshal(responseBody, target); unmarshalError != nil {
 		return fmt.Errorf("parse response: %w", unmarshalError)
 	}
