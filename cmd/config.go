@@ -9,11 +9,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// savedConfig mirrors the keys of ~/.tael.yaml.
+// savedConfig mirrors the keys of ~/.tael.yaml. Workspace is the slug
+// shown to the person; WorkspaceID is what `tael workspace use` chose and
+// what every request then names.
 type savedConfig struct {
-	Token     string
-	BaseURL   string
-	Workspace string
+	Token       string
+	BaseURL     string
+	Workspace   string
+	WorkspaceID string
 }
 
 // configFilePath returns the config file location, honouring the
@@ -39,9 +42,10 @@ func readConfigFile() savedConfig {
 		return savedConfig{}
 	}
 	return savedConfig{
-		Token:     fileConfig.GetString("token"),
-		BaseURL:   fileConfig.GetString("base_url"),
-		Workspace: fileConfig.GetString("workspace"),
+		Token:       fileConfig.GetString("token"),
+		BaseURL:     fileConfig.GetString("base_url"),
+		Workspace:   fileConfig.GetString("workspace"),
+		WorkspaceID: fileConfig.GetString("workspace_id"),
 	}
 }
 
@@ -64,6 +68,7 @@ func writeConfigFile(config savedConfig) error {
 	fileConfig.Set("token", config.Token)
 	fileConfig.Set("base_url", config.BaseURL)
 	fileConfig.Set("workspace", config.Workspace)
+	fileConfig.Set("workspace_id", config.WorkspaceID)
 	if writeError := fileConfig.WriteConfig(); writeError != nil {
 		return fmt.Errorf("save config: %w", writeError)
 	}

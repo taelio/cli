@@ -41,11 +41,19 @@ func (apiError *APIError) Error() string {
 	return fmt.Sprintf("%s (status %d)", apiError.Detail, apiError.StatusCode)
 }
 
+// WorkspaceHeader names the workspace a request acts in when the person
+// chose one with `tael workspace use`. The API honours it wherever the
+// caller is a member; a token that cannot move workspaces ignores it.
+const WorkspaceHeader = "X-Tael-Workspace-Id"
+
 // Client is the base HTTP client for the tael API.
 type Client struct {
 	Token     string
 	BaseURL   string
 	UserAgent string
+	// WorkspaceID, when set, is sent as the workspace header on every
+	// request.
+	WorkspaceID string
 
 	// HTTP serves ordinary request/response calls and is bounded by a 30s
 	// timeout. StreamingHTTP has no client-side timeout so long-lived SSE
@@ -85,6 +93,9 @@ func (client *Client) newRequest(requestContext context.Context, method string, 
 	request.Header.Set("Authorization", "Bearer "+client.Token)
 	request.Header.Set("User-Agent", client.UserAgent)
 	request.Header.Set("Accept", "application/json")
+	if client.WorkspaceID != "" {
+		request.Header.Set(WorkspaceHeader, client.WorkspaceID)
+	}
 	if requestBody != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

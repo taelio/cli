@@ -80,6 +80,7 @@ func persistentPreRunE(command *cobra.Command, _ []string) error {
 			"not logged in: run `tael login`, or provide a token via --token or "+envAPIToken))
 	}
 	apiClient = client.New(configuration.Token, configuration.BaseURL, version)
+	apiClient.WorkspaceID = configuration.WorkspaceID
 	return nil
 }
 
@@ -89,6 +90,9 @@ type configuration struct {
 	Token     string
 	BaseURL   string
 	Workspace string
+	// WorkspaceID is the workspace chosen with `tael workspace use`, from
+	// the config file only; the flag and environment carry the slug.
+	WorkspaceID string
 }
 
 // resolveConfiguration merges the three configuration sources for every
@@ -97,9 +101,10 @@ func resolveConfiguration(command *cobra.Command) configuration {
 	saved := readConfigFile()
 	flags := command.Root().PersistentFlags()
 	return configuration{
-		Token:     resolveSetting(flagStringValue(flags, "token"), os.Getenv(envAPIToken), saved.Token, ""),
-		BaseURL:   resolveSetting(flagStringValue(flags, "base-url"), os.Getenv(envBaseURL), saved.BaseURL, defaultBaseURL),
-		Workspace: resolveSetting(flagStringValue(flags, "workspace"), os.Getenv(envWorkspace), saved.Workspace, ""),
+		Token:       resolveSetting(flagStringValue(flags, "token"), os.Getenv(envAPIToken), saved.Token, ""),
+		BaseURL:     resolveSetting(flagStringValue(flags, "base-url"), os.Getenv(envBaseURL), saved.BaseURL, defaultBaseURL),
+		Workspace:   resolveSetting(flagStringValue(flags, "workspace"), os.Getenv(envWorkspace), saved.Workspace, ""),
+		WorkspaceID: saved.WorkspaceID,
 	}
 }
 

@@ -17,10 +17,18 @@ import (
 
 // runCommand executes the real command tree against an httptest server,
 // the way a person would from a shell, and returns what was printed. Every
-// flag is reset to its default afterwards so tests do not leak state.
+// flag is reset to its default afterwards so tests do not leak state. The
+// config file is a fresh temporary one.
 func runCommand(t *testing.T, server *httptest.Server, args ...string) (string, error) {
 	t.Helper()
-	t.Setenv("TAEL_CONFIG", filepath.Join(t.TempDir(), "tael.yaml"))
+	return runCommandKeepingConfig(t, server, filepath.Join(t.TempDir(), "tael.yaml"), args...)
+}
+
+// runCommandKeepingConfig is runCommand against a config file the test
+// chose, so what one command saved is what the next one reads.
+func runCommandKeepingConfig(t *testing.T, server *httptest.Server, configPath string, args ...string) (string, error) {
+	t.Helper()
+	t.Setenv("TAEL_CONFIG", configPath)
 	t.Setenv(envAPIToken, "")
 	t.Setenv(envBaseURL, "")
 	t.Setenv(envWorkspace, "")
@@ -71,7 +79,7 @@ func newAPIServer(t *testing.T, routes ...route) (*httptest.Server, *[]recordedR
 	recorded := &[]recordedRequest{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
-		*recorded = append(*recorded, recordedRequest{Method: request.Method, Path: request.URL.RequestURI(), Body: string(body)})
+		*recorded = append(*recorded, recordedRequest{Method: request.Method, Path: request.URL.RequestURI(), Body: string(body), Headers: request.Header.Clone()})
 		writer.Header().Set("Content-Type", "application/json")
 		for _, candidate := range routes {
 			if candidate.method == request.Method && candidate.path == request.URL.Path {
@@ -88,9 +96,10 @@ func newAPIServer(t *testing.T, routes ...route) (*httptest.Server, *[]recordedR
 }
 
 type recordedRequest struct {
-	Method string
-	Path   string
-	Body   string
+	Method  string
+	Path    string
+	Body    string
+	Headers http.Header
 }
 
 // lastRequest is the most recent request with this method and path (the
