@@ -107,6 +107,8 @@ your token; otherwise it says so and how to get a token for that workspace.
 | `tael approve <id> [--note]` | Say yes to what a task is waiting on (or to a proposal) |
 | `tael decline <id> [--note]` | Say no                                                |
 | `tael why [app]`    | Why the last deploy failed; asks Tael and follows the investigation when nothing failed yet |
+| `tael ask "<question>" [--app]` | Ask Tael a question; the answer streams, with what Tael looked at along the way |
+| `tael feed [-f] [--last N] [--since <id>]` | What Tael is doing, one line each in its own words; `-f` keeps listening |
 | `tael pause` / `tael resume` | Stop Tael starting or carrying out anything, and let it work again |
 | `tael settings ai`  | How much Tael may do on its own: who approves, what runs unasked, quiet hours |
 | `tael settings ai --approvers admins\|members --pre-approve category=N --quiet-hours HH:MM-HH:MM[@Zone] --clear-quiet-hours` | Change it (owners and admins only) |
@@ -142,6 +144,24 @@ your token; otherwise it says so and how to get a token for that workspace.
 Commands taking `[app]` accept an app name or id. When the workspace has
 exactly one app the argument can be omitted. A solution's `<name>` is its
 display name, its instance name or its id.
+
+### What stays in the browser
+
+A few actions are deliberately only available to a signed-in browser
+session, so the CLI does not offer them:
+
+- **Installing the Tael GitHub App** (connecting GitHub, picking the
+  repositories Tael may see) is a round trip through github.com. Do it once
+  from the web app; `tael repos` then lists what Tael can see.
+- **Revealing a solution's connection values.** `tael solutions connection`
+  shows the names with the secrets masked; the values are only ever shown
+  in the web app, and every reveal is on the record. Apps read the real
+  values on deploy without anyone seeing them.
+- **Creating a workspace and switching the browser's workspace.** A token
+  is made inside one workspace; see `tael workspace use` above for how the
+  CLI handles a choice the token cannot follow.
+- **Signing in and out of the web app itself.** `tael login` has its own
+  browser-approved flow and makes a token for the workspace you are in.
 
 ## Exit codes
 
