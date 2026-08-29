@@ -69,10 +69,132 @@ var taskCmd = &cobra.Command{
 	},
 }
 
+var (
+	tasksNewAppFlag  string
+	tasksNewKindFlag string
+)
+
+var tasksNewCmd = &cobra.Command{
+	Use:   "new <brief>",
+	Short: "Ask Tael to look into something, in your words",
+	Long: `Open a task in your words: "why is the checkout slow?", "review the
+last deploy". Name an app with --app; --kind is investigate (the default),
+fix, review or audit.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(command *cobra.Command, args []string) error {
+		brief := strings.TrimSpace(args[0])
+		if brief == "" {
+			return withExitCode(exitUsage, fmt.Errorf("say what Tael should look into"))
+		}
+		detail, createError := apiClient.CreateTask(command.Context(), brief, tasksNewAppFlag, tasksNewKindFlag)
+		if createError != nil {
+			return createError
+		}
+		if rendered, renderError := renderJSON(command, detail); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprint(command.OutOrStdout(), renderTaskOpened(detail))
+		return nil
+	},
+}
+
+var taskCommentCmd = &cobra.Command{
+	Use:   "comment <id> <text>",
+	Short: "Leave a comment on a task, for Tael and the team",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(command *cobra.Command, args []string) error {
+		comment, commentError := apiClient.AddTaskComment(command.Context(), args[0], args[1])
+		if commentError != nil {
+			return commentError
+		}
+		if rendered, renderError := renderJSON(command, comment); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprintf(command.OutOrStdout(), "Noted on the task: %s\n", strings.TrimSpace(comment.Body))
+		return nil
+	},
+}
+
+var needsYouCmd = &cobra.Command{
+	Use:   "needs-you",
+	Short: "What is waiting on you: decisions Tael has asked for, and proposals",
+	Args:  cobra.NoArgs,
+	RunE: func(command *cobra.Command, _ []string) error {
+		response, listError := apiClient.NeedsYou(command.Context())
+		if listError != nil {
+			return listError
+		}
+		if rendered, renderError := renderJSON(command, response); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprint(command.OutOrStdout(), renderNeedsYou(response))
+		return nil
+	},
+}
+
 func init() {
 	tasksCmd.Flags().BoolVar(&tasksDone, "done", false, "list finished tasks instead of open ones")
+	tasksNewCmd.Flags().StringVar(&tasksNewAppFlag, "app", "", "the app it is about (name or id)")
+	tasksNewCmd.Flags().StringVar(&tasksNewKindFlag, "kind", "", "investigate (the default), fix, review or audit")
+	tasksCmd.AddCommand(tasksNewCmd)
+	taskCmd.AddCommand(taskCommentCmd)
 	rootCmd.AddCommand(tasksCmd)
 	rootCmd.AddCommand(taskCmd)
+	rootCmd.AddCommand(needsYouCmd)
+}
+
+// renderTaskOpened says what happened to a request, the way `tael why`
+// does: on it, or on the record when this workspace cannot run it.
+func renderTaskOpened(detail *client.TaskDetail) string {
+	task := detail.Task
+	if task.Status == "proposed" {
+		return fmt.Sprintf("Asked Tael: %s\nTael can't run that on this workspace yet; the task is on the record: tael task %s\n", task.Title, task.ID)
+	}
+	return fmt.Sprintf("Asked Tael: %s\nTael is on it (%s). Follow it with `tael task %s`.\n", task.Title, statusWords(task.Status), task.ID)
+}
+
+// renderNeedsYou renders the strip in text: each decision with its task,
+// and what to type.
+func renderNeedsYou(response *client.NeedsYouResponse) string {
+	if len(response.Items) == 0 {
+		return "Nothing needs you. Tael says so here when something does.\n"
+	}
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Needs you (%d):\n", len(response.Items))
+	for _, item := range response.Items {
+		task := item.Task
+		line := "  " + task.Title
+		if item.Approval != nil && strings.TrimSpace(item.Approval.Summary) != "" {
+			line += " — " + strings.TrimSpace(item.Approval.Summary)
+			var facts []string
+			if item.Approval.Risk != "" {
+				facts = append(facts, item.Approval.Risk+" risk")
+			}
+			if item.Approval.Reversible {
+				facts = append(facts, "reversible")
+			} else if item.Approval.Risk != "" {
+				facts = append(facts, "not reversible")
+			}
+			if len(facts) > 0 {
+				line += " (" + strings.Join(facts, ", ") + ")"
+			}
+		} else if task.Status == "proposed" {
+			line += " — Tael proposes this"
+		}
+		if name := appName(task); name != "" {
+			line += " · " + name
+		}
+		waitingSince := task.CreatedAt
+		if item.Approval != nil && item.Approval.RequestedAt != "" {
+			waitingSince = item.Approval.RequestedAt
+		}
+		if formatted := formatTimestamp(waitingSince); formatted != "" {
+			line += " · since " + formatted
+		}
+		builder.WriteString(line + "\n")
+		fmt.Fprintf(&builder, "  → tael approve %s   or   tael decline %s\n", task.ID, task.ID)
+	}
+	return builder.String()
 }
 
 // statusWords turns an API status into words: needs_approval → "needs you",

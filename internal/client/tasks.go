@@ -101,14 +101,53 @@ type ListTasksResponse struct {
 	Tasks []Task `json:"tasks"`
 }
 
+// PreApproval is the monthly allowance for a category Tael may act on
+// without asking.
+type PreApproval struct {
+	PerMonth int `json:"per_month"`
+}
+
+// QuietHours is when scheduled work keeps quiet, as "HH:MM" in a zone.
+type QuietHours struct {
+	Start    string `json:"start"`
+	End      string `json:"end"`
+	Timezone string `json:"timezone"`
+}
+
+// AISettings is how much Tael may do in the workspace and who decides.
 type AISettings struct {
-	Plan             string  `json:"plan"`
-	Paused           bool    `json:"paused"`
-	PausedAt         *string `json:"paused_at"`
-	PausedBy         *string `json:"paused_by"`
-	Approvers        string  `json:"approvers"`
-	Budget           int     `json:"budget"`
-	ActionsThisMonth int     `json:"actions_this_month"`
+	Plan                    string                 `json:"plan"`
+	Paused                  bool                   `json:"paused"`
+	PausedAt                *string                `json:"paused_at"`
+	PausedBy                *string                `json:"paused_by"`
+	PreApproved             map[string]PreApproval `json:"pre_approved"`
+	QuietHours              *QuietHours            `json:"quiet_hours"`
+	Approvers               string                 `json:"approvers"`
+	AllowanceExhaustedUntil *string                `json:"allowance_exhausted_until"`
+	Budget                  int                    `json:"budget"`
+	ActionsThisMonth        int                    `json:"actions_this_month"`
+}
+
+// AISettingsUpdate is what a PUT may change; a nil field keeps its value.
+// PreApproved replaces the whole map, so callers merge first.
+type AISettingsUpdate struct {
+	Paused          *bool                   `json:"paused,omitempty"`
+	PreApproved     *map[string]PreApproval `json:"pre_approved,omitempty"`
+	QuietHours      *QuietHours             `json:"quiet_hours,omitempty"`
+	ClearQuietHours bool                    `json:"clear_quiet_hours,omitempty"`
+	Approvers       *string                 `json:"approvers,omitempty"`
+}
+
+// NeedsYouItem is one thing waiting on a person: the approval and the
+// task it belongs to (no approval for a proposal as a whole).
+type NeedsYouItem struct {
+	Task     Task      `json:"task"`
+	Approval *Approval `json:"approval"`
+}
+
+type NeedsYouResponse struct {
+	Items []NeedsYouItem `json:"items"`
+	Count int            `json:"count"`
 }
 
 // ListTasks lists the workspace's tasks. status is open, done or all
@@ -194,10 +233,37 @@ func (client *Client) GetAISettings(requestContext context.Context) (*AISettings
 
 // SetPaused pauses or resumes Tael for the whole workspace.
 func (client *Client) SetPaused(requestContext context.Context, paused bool) (*AISettings, error) {
+	return client.UpdateAISettings(requestContext, AISettingsUpdate{Paused: &paused})
+}
+
+// UpdateAISettings changes how much Tael may do. Owners and admins only;
+// the API refuses a bad value with a sentence.
+func (client *Client) UpdateAISettings(requestContext context.Context, update AISettingsUpdate) (*AISettings, error) {
 	var settings AISettings
-	body := map[string]bool{"paused": paused}
-	if requestError := client.doJSON(requestContext, http.MethodPut, "/api/v1/workspace/ai-settings", body, &settings); requestError != nil {
+	if requestError := client.doJSON(requestContext, http.MethodPut, "/api/v1/workspace/ai-settings", update, &settings); requestError != nil {
 		return nil, requestError
 	}
 	return &settings, nil
+}
+
+// AddTaskComment leaves a comment on a task, for Tael and the team.
+func (client *Client) AddTaskComment(requestContext context.Context, taskID string, body string) (*TaskComment, error) {
+	var response struct {
+		Comment TaskComment `json:"comment"`
+	}
+	path := "/api/v1/tasks/" + url.PathEscape(taskID) + "/comments"
+	if requestError := client.doJSON(requestContext, http.MethodPost, path, map[string]string{"body": body}, &response); requestError != nil {
+		return nil, requestError
+	}
+	return &response.Comment, nil
+}
+
+// NeedsYou lists what is waiting on a person: pending approvals and open
+// proposals, with their tasks.
+func (client *Client) NeedsYou(requestContext context.Context) (*NeedsYouResponse, error) {
+	var response NeedsYouResponse
+	if requestError := client.doJSON(requestContext, http.MethodGet, "/api/v1/needs-you", nil, &response); requestError != nil {
+		return nil, requestError
+	}
+	return &response, nil
 }
