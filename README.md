@@ -132,6 +132,7 @@ your token; otherwise it says so and how to get a token for that workspace.
 | `tael workspace use <slug>` | Act in another workspace, where the token can follow (see below) |
 | `tael members`      | Who is in the workspace and how it admits people               |
 | `tael members remove <user>` | Take a person out (by GitHub login, email, name or id); owners and admins only |
+| `tael member role <user> <role>` | Change a person's role to owner, admin or member; owners and admins only |
 | `tael invite link [--max-uses N]` | Make a join link anyone can use (`--role member\|admin`)   |
 | `tael invite email <address>` / `tael invite github <login>` | Invite one person; the join link is shown once |
 | `tael invites`      | List invitations; `tael invites revoke <id>` stops one working |

@@ -11,13 +11,15 @@ import (
 	"tael.io/cli/internal/client"
 )
 
-// tael members — who is in the workspace, and taking someone out. A
-// person is named by their GitHub login, email, name or id.
+// tael members — who is in the workspace, changing a person's role, and
+// taking someone out. A person is named by their GitHub login, email, name
+// or id.
 
 var membersCmd = &cobra.Command{
-	Use:   "members",
-	Short: "Who is in the workspace; `members remove <user>` takes someone out",
-	Args:  cobra.NoArgs,
+	Use:     "members",
+	Aliases: []string{"member"},
+	Short:   "Who is in the workspace; `member role` changes a role, `members remove` takes someone out",
+	Args:    cobra.NoArgs,
 	RunE: func(command *cobra.Command, _ []string) error {
 		listResponse, listError := apiClient.ListMembers(command.Context())
 		if listError != nil {
@@ -51,9 +53,42 @@ var membersRemoveCmd = &cobra.Command{
 	},
 }
 
+var membersRoleCmd = &cobra.Command{
+	Use:   "role <user> <role>",
+	Short: "Change a person's role: owner, admin or member (owners and admins only)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(command *cobra.Command, args []string) error {
+		role := strings.ToLower(strings.TrimSpace(args[1]))
+		if role != "owner" && role != "admin" && role != "member" {
+			return withExitCode(exitUsage, fmt.Errorf("a role is owner, admin or member, not %q", args[1]))
+		}
+		member, resolveError := resolveMemberArgument(command.Context(), args[0])
+		if resolveError != nil {
+			return resolveError
+		}
+		if updateError := apiClient.UpdateMemberRole(command.Context(), member.UserID, role); updateError != nil {
+			return updateError
+		}
+		if rendered, renderError := renderJSON(command, map[string]string{"user_id": member.UserID, "role": role, "status": "changed"}); rendered || renderError != nil {
+			return renderError
+		}
+		fmt.Fprintf(command.OutOrStdout(), "%s is now %s.\n", memberName(*member), roleWithArticle(role))
+		return nil
+	},
+}
+
 func init() {
-	membersCmd.AddCommand(membersRemoveCmd)
+	membersCmd.AddCommand(membersRemoveCmd, membersRoleCmd)
 	rootCmd.AddCommand(membersCmd)
+}
+
+// roleWithArticle says a role as a phrase: "an owner", "an admin", "a member".
+func roleWithArticle(role string) string {
+	switch role {
+	case "owner", "admin":
+		return "an " + role
+	}
+	return "a " + role
 }
 
 // memberName is what a person is called: their name, else their GitHub

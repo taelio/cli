@@ -83,6 +83,13 @@ func (client *Client) RemoveMember(requestContext context.Context, userID string
 	return client.doJSON(requestContext, http.MethodDelete, "/api/v1/members/"+url.PathEscape(userID), nil, nil)
 }
 
+// UpdateMemberRole changes a person's role in the workspace. Owners and
+// admins only; the API refuses to demote the last owner.
+func (client *Client) UpdateMemberRole(requestContext context.Context, userID string, role string) error {
+	body := map[string]string{"role": role}
+	return client.doJSON(requestContext, http.MethodPatch, "/api/v1/members/"+url.PathEscape(userID), body, nil)
+}
+
 // ListInvitations returns the workspace's invitations. Owners and admins only.
 func (client *Client) ListInvitations(requestContext context.Context) (*ListInvitationsResponse, error) {
 	var listResponse ListInvitationsResponse

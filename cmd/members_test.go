@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -50,6 +51,57 @@ func TestMembersRemoveResolvesThePersonAndHandsRefusalsThrough(t *testing.T) {
 	_, unknown := runCommand(t, server, "members", "remove", "nobody")
 	if unknown == nil || exitCodeFor(unknown) != exitUsage || !strings.Contains(unknown.Error(), "members: Dana, sam") {
 		t.Fatalf("removing nobody = %v, want a usage error listing the members", unknown)
+	}
+}
+
+func TestMemberRoleChangesAPersonsRole(t *testing.T) {
+	server, recorded := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/members", http.StatusOK, membersJSON},
+		route{http.MethodPatch, "/api/v1/members/u_2", http.StatusOK, `{"user_id":"u_2","role":"admin"}`},
+		route{http.MethodPatch, "/api/v1/members/u_1", http.StatusConflict, `{"detail":"Every workspace needs at least one owner."}`},
+	)
+	output, runError := runCommand(t, server, "member", "role", "@Sam", "admin")
+	if runError != nil {
+		t.Fatalf("tael member role: %v", runError)
+	}
+	mustContain(t, output, "sam is now an admin.\n")
+	mustSpeakTael(t, output)
+	body := decodeBody(t, lastRequest(recorded, http.MethodPatch, "/api/v1/members/u_2"))
+	if body["role"] != "admin" || len(body) != 1 {
+		t.Fatalf("role body = %v", body)
+	}
+
+	_, lastOwner := runCommand(t, server, "members", "role", "dana@acme.io", "member")
+	if lastOwner == nil || !strings.Contains(lastOwner.Error(), "at least one owner") || exitCodeFor(lastOwner) != exitError {
+		t.Fatalf("demoting the last owner = %v (exit %d), want the API's sentence with exit %d", lastOwner, exitCodeFor(lastOwner), exitError)
+	}
+
+	_, unknownMember := runCommand(t, server, "member", "role", "nobody", "admin")
+	if unknownMember == nil || exitCodeFor(unknownMember) != exitUsage || !strings.Contains(unknownMember.Error(), "members: Dana, sam") {
+		t.Fatalf("changing nobody's role = %v, want a usage error listing the members", unknownMember)
+	}
+
+	_, unknownRole := runCommand(t, server, "member", "role", "sam", "boss")
+	if unknownRole == nil || exitCodeFor(unknownRole) != exitUsage || !strings.Contains(unknownRole.Error(), "owner, admin or member") {
+		t.Fatalf("tael member role sam boss = %v, want a usage error naming the roles", unknownRole)
+	}
+}
+
+func TestMemberRoleRendersJSON(t *testing.T) {
+	server, _ := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/members", http.StatusOK, membersJSON},
+		route{http.MethodPatch, "/api/v1/members/u_2", http.StatusOK, `{"user_id":"u_2","role":"admin"}`},
+	)
+	output, runError := runCommand(t, server, "member", "role", "sam", "admin", "-o", "json")
+	if runError != nil {
+		t.Fatalf("tael member role -o json: %v", runError)
+	}
+	var decoded map[string]string
+	if unmarshalError := json.Unmarshal([]byte(output), &decoded); unmarshalError != nil {
+		t.Fatalf("output %q is not JSON: %v", output, unmarshalError)
+	}
+	if decoded["user_id"] != "u_2" || decoded["role"] != "admin" || decoded["status"] != "changed" {
+		t.Fatalf("json output = %v", decoded)
 	}
 }
 
