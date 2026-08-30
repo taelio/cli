@@ -38,8 +38,20 @@ type CouponGrant struct {
 	AITokensIncluded int64  `json:"ai_tokens_included"`
 }
 
+// AppliedCoupon is the coupon in force on the workspace, as GET
+// /api/v1/workspace/coupon reports it while the grant lasts.
+type AppliedCoupon struct {
+	Code             string `json:"code"`
+	Plan             string `json:"plan"`
+	GrantedUntil     string `json:"granted_until"`
+	AppsIncluded     int    `json:"apps_included"`
+	AITokensIncluded int64  `json:"ai_tokens_included"`
+	RedeemedAt       string `json:"redeemed_at"`
+}
+
 type CouponGrantResponse struct {
-	Grant *CouponGrant `json:"grant"`
+	Grant   *CouponGrant   `json:"grant"`
+	Applied *AppliedCoupon `json:"applied,omitempty"`
 }
 
 // GetWorkspaceStatus reads the workspace summary: plan, apps, incidents,

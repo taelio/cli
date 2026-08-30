@@ -56,3 +56,48 @@ func TestPlanAndCoupon(t *testing.T) {
 		t.Fatalf("tael coupon NOPE = %v", unknownError)
 	}
 }
+
+func TestCouponShowsTheAppliedCoupon(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previousLocal })
+
+	applied, recorded := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/workspace/coupon", http.StatusOK, `{"grant":{"code":"TAEL-7Q2K","plan":"launch","until":"2027-02-28T00:00:00Z","apps_included":5,"ai_tokens_included":20000000},"applied":{"code":"TAEL-7Q2K","plan":"launch","granted_until":"2027-02-28T00:00:00Z","apps_included":5,"ai_tokens_included":20000000,"redeemed_at":"2026-08-30T09:15:00Z"}}`},
+	)
+	output, showError := runCommand(t, applied, "coupon")
+	if showError != nil {
+		t.Fatalf("tael coupon: %v", showError)
+	}
+	if want := "TAEL-7Q2K applied — Launch until 28 Feb 2027 · 5 apps · 20M AI tokens\n"; output != want {
+		t.Fatalf("tael coupon = %q, want %q", output, want)
+	}
+	mustSpeakTael(t, output)
+	if request := lastRequest(recorded, http.MethodGet, "/api/v1/workspace/coupon"); request == nil {
+		t.Fatalf("no GET /api/v1/workspace/coupon recorded")
+	}
+	if request := lastRequest(recorded, http.MethodPost, "/api/v1/workspace/coupon"); request != nil {
+		t.Fatalf("tael coupon without a code must not redeem anything, sent %v", request)
+	}
+
+	// -o json prints the answer as it came, applied and all.
+	jsonOutput, jsonError := runCommand(t, applied, "coupon", "-o", "json")
+	if jsonError != nil || !strings.Contains(jsonOutput, `"applied": {`) || !strings.Contains(jsonOutput, `"granted_until": "2027-02-28T00:00:00Z"`) {
+		t.Fatalf("tael coupon -o json = %q, %v", jsonOutput, jsonError)
+	}
+
+	// Without a coupon in force, it says so and how to apply one.
+	none, _ := newAPIServer(t, route{http.MethodGet, "/api/v1/workspace/coupon", http.StatusOK, `{"grant":null}`})
+	output, noneError := runCommand(t, none, "coupon")
+	if noneError != nil || output != "No coupon in force. Have one? `tael coupon <code>`.\n" {
+		t.Fatalf("tael coupon with none = %q, %v", output, noneError)
+	}
+	mustSpeakTael(t, output)
+
+	// An API that reports the grant but not yet `applied` still shows it.
+	older, _ := newAPIServer(t, route{http.MethodGet, "/api/v1/workspace/coupon", http.StatusOK, `{"grant":{"code":"LAUNCH2026","plan":"launch","until":"2026-12-31T00:00:00Z","apps_included":3,"ai_tokens_included":0}}`})
+	output, olderError := runCommand(t, older, "coupon")
+	if olderError != nil || output != "LAUNCH2026 — this workspace is on launch until 2026-12-31 00:00 (3 apps included).\n" {
+		t.Fatalf("tael coupon on an older API = %q, %v", output, olderError)
+	}
+}

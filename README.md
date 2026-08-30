@@ -113,7 +113,8 @@ your token; otherwise it says so and how to get a token for that workspace.
 | `tael settings ai`  | How much Tael may do on its own: who approves, what runs unasked, quiet hours |
 | `tael settings ai --approvers admins\|members --pre-approve category=N --quiet-hours HH:MM-HH:MM[@Zone] --clear-quiet-hours` | Change it (owners and admins only) |
 | `tael plan`         | The workspace's plan, what it holds, the runtime, and any coupon in force (with a sentence, see Architecture below) |
-| `tael coupon <code>` | Apply a coupon code                                           |
+| `tael coupon [code]` | Apply a coupon code; alone, the coupon in force ("TAEL-XXXX applied — Launch until 28 Feb 2027 · 5 apps · 20M AI tokens") |
+| `tael usage`        | The meters this period: apps, seats, AI tokens (with "(coupon)" when the allowance comes from one, "part estimated" when some tokens were estimated), custom domains, and the deploys and builds so far |
 | `tael tokens`       | Your API tokens for this workspace (never their secrets)       |
 | `tael tokens create <name> [--expires 30d\|YYYY-MM-DD]` | Make a token; the secret is printed this once |
 | `tael tokens revoke <id or name>` | Make a token stop working                          |

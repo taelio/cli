@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -49,11 +50,15 @@ runtime, and any coupon in force.`,
 	},
 }
 
+// tael coupon with a code applies it; alone, it shows the coupon in force.
 var couponCmd = &cobra.Command{
-	Use:   "coupon <code>",
-	Short: "Apply a coupon code to the workspace",
-	Args:  cobra.ExactArgs(1),
+	Use:   "coupon [code]",
+	Short: "Apply a coupon code to the workspace; alone, the coupon in force",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(command *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return runCouponShow(command)
+		}
 		code := strings.TrimSpace(args[0])
 		if code == "" {
 			return withExitCode(exitUsage, fmt.Errorf("say the code"))
@@ -76,6 +81,60 @@ var couponCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(planCmd, couponCmd)
+}
+
+// runCouponShow prints the coupon in force: the applied coupon when the
+// API reports one, else the grant in the older words, else none.
+func runCouponShow(command *cobra.Command) error {
+	response, couponError := apiClient.GetCouponGrant(command.Context())
+	if couponError != nil {
+		return couponError
+	}
+	if rendered, renderError := renderJSON(command, response); rendered || renderError != nil {
+		return renderError
+	}
+	switch {
+	case response.Applied != nil:
+		fmt.Fprintln(command.OutOrStdout(), appliedCouponLine(response.Applied))
+	case response.Grant != nil:
+		fmt.Fprintf(command.OutOrStdout(), "%s — %s\n", response.Grant.Code, grantWords(response.Grant))
+	default:
+		fmt.Fprintln(command.OutOrStdout(), "No coupon in force. Have one? `tael coupon <code>`.")
+	}
+	return nil
+}
+
+// appliedCouponLine is the one line for a coupon in force:
+// "TAEL-XXXX applied — Launch until 28 Feb 2027 · 5 apps · 20M AI tokens".
+func appliedCouponLine(applied *client.AppliedCoupon) string {
+	parts := []string{fmt.Sprintf("%s until %s", planName(applied.Plan), formatDate(applied.GrantedUntil))}
+	if applied.AppsIncluded > 0 {
+		parts = append(parts, plural(applied.AppsIncluded, "app", "apps"))
+	}
+	if applied.AITokensIncluded > 0 {
+		parts = append(parts, compactCount(applied.AITokensIncluded)+" AI tokens")
+	}
+	return fmt.Sprintf("%s applied — %s", applied.Code, strings.Join(parts, " · "))
+}
+
+// planName is the plan as a name: launch → Launch.
+func planName(plan string) string {
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return "-"
+	}
+	return strings.ToUpper(plan[:1]) + plan[1:]
+}
+
+// formatDate renders a day the way a sentence says it, "28 Feb 2027",
+// from a date or an RFC3339 timestamp; anything else is shown as sent.
+func formatDate(raw string) string {
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if parsed, parseError := time.Parse(layout, raw); parseError == nil {
+			return parsed.Format("2 Jan 2006")
+		}
+	}
+	return valueOrDash(raw)
 }
 
 // grantWords says what a coupon put in place.
