@@ -156,6 +156,9 @@ func commandRequiresAuth(command *cobra.Command) bool {
 	case "help", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
 		return false
 	}
+	if isShellCompletionCommand(command) {
+		return false
+	}
 	for current := command; current != nil; current = current.Parent() {
 		if current.Annotations == nil {
 			continue
@@ -165,4 +168,17 @@ func commandRequiresAuth(command *cobra.Command) bool {
 		}
 	}
 	return true
+}
+
+// isShellCompletionCommand reports whether the command is cobra's
+// `completion <shell>` generator or one of its shells. Cobra adds it at
+// execution time, so it cannot carry the annotation; Homebrew runs it while
+// installing, before anyone has logged in.
+func isShellCompletionCommand(command *cobra.Command) bool {
+	for current := command; current != nil; current = current.Parent() {
+		if current.Name() == "completion" && current.HasParent() && !current.Parent().HasParent() {
+			return true
+		}
+	}
+	return false
 }
