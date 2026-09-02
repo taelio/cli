@@ -165,6 +165,12 @@ func withThousands(value int64) string {
 	return builder.String()
 }
 
+// runtimeNotAnswering says the backend reports the runtime as not
+// answering right now; an older backend says nothing, which reads as fine.
+func runtimeNotAnswering(status *client.WorkspaceStatus) bool {
+	return status.Runtime != nil && !status.Runtime.Reachable
+}
+
 // renderPlan prints the plan and what the workspace holds, the runtime,
 // and the coupon in force.
 func renderPlan(status *client.WorkspaceStatus, grant *client.CouponGrant) string {
@@ -178,6 +184,9 @@ func renderPlan(status *client.WorkspaceStatus, grant *client.CouponGrant) strin
 	fmt.Fprintf(&builder, "Holding:   %s\n", strings.Join(holding, " · "))
 	if environment := status.Environment; environment != nil {
 		runtime := valueOrDash(environment.Status)
+		if runtimeNotAnswering(status) {
+			runtime = "not answering"
+		}
 		if environment.Tier != nil && *environment.Tier != "" {
 			runtime += " (" + *environment.Tier + ")"
 		}
@@ -185,6 +194,9 @@ func renderPlan(status *client.WorkspaceStatus, grant *client.CouponGrant) strin
 			runtime += " · addresses under " + *environment.BaseDomain
 		}
 		fmt.Fprintf(&builder, "Runtime:   %s\n", runtime)
+		if runtimeNotAnswering(status) && status.Runtime.Detail != "" {
+			fmt.Fprintf(&builder, "           %s\n", status.Runtime.Detail)
+		}
 		if environment.PendingRuntime != nil && *environment.PendingRuntime != "" {
 			builder.WriteString("           A dedicated runtime is on its way; apps move over when it is ready.\n")
 		}

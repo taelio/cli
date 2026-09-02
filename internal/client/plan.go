@@ -18,6 +18,15 @@ type WorkspaceEnvironment struct {
 	UpgradeError   *string `json:"upgrade_error"`
 }
 
+// WorkspaceRuntime is whether the runtime is answering right now — the
+// view the web app's banner reads — as distinct from what the environment
+// is: a dedicated machine reads ready while its agent is gone.
+type WorkspaceRuntime struct {
+	Reachable        bool    `json:"reachable"`
+	UnreachableSince *string `json:"unreachable_since"`
+	Detail           string  `json:"detail"`
+}
+
 type WorkspaceStatus struct {
 	WorkspaceStatus string                `json:"workspace_status"`
 	Plan            string                `json:"plan"`
@@ -27,6 +36,8 @@ type WorkspaceStatus struct {
 	NeedsYou        int                   `json:"needs_you"`
 	RuntimeStatus   *string               `json:"runtime_status"`
 	Environment     *WorkspaceEnvironment `json:"environment"`
+	// Runtime is absent on an older backend, which reads as answering.
+	Runtime *WorkspaceRuntime `json:"runtime"`
 }
 
 // CouponGrant is what a redeemed coupon put in place, in plain terms.
