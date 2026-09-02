@@ -101,3 +101,26 @@ func TestCouponShowsTheAppliedCoupon(t *testing.T) {
 		t.Fatalf("tael coupon on an older API = %q, %v", output, olderError)
 	}
 }
+
+// A dedicated runtime whose agent is gone keeps its environment at ready;
+// the plan says it is not answering, and since when, ahead of the rest.
+func TestPlanSaysWhenTheRuntimeIsNotAnswering(t *testing.T) {
+	server, _ := newAPIServer(t,
+		route{http.MethodGet, "/api/v1/status", http.StatusOK, `{"workspace_status":"ready","plan":"launch","apps_total":1,"apps_live":0,"open_incidents":0,"needs_you":0,"runtime_status":"ready",` +
+			`"environment":{"status":"ready","tier":"starter","kind":"hetzner","base_domain":"codestaple.tael.site","pending_cluster":null,"upgrade_error":null},` +
+			`"runtime":{"reachable":false,"unreachable_since":"2026-08-30T13:35:54Z","last_answered_at":"2026-08-30T13:35:54Z","detail":"The runtime has not answered since 13:35 on 30 August. Your apps keep serving; deploys and installs wait."}}`},
+		route{http.MethodGet, "/api/v1/workspace/coupon", http.StatusOK, `{"grant":null}`},
+	)
+	output, planError := runCommand(t, server, "plan")
+	if planError != nil {
+		t.Fatalf("tael plan: %v", planError)
+	}
+	mustContain(t, output,
+		"Runtime:   not answering (starter) · addresses under codestaple.tael.site\n",
+		"           The runtime has not answered since 13:35 on 30 August. Your apps keep serving; deploys and installs wait.\n",
+	)
+	if strings.Contains(output, "Runtime:   ready") {
+		t.Fatalf("the environment's ready must not stand in for the runtime: %q", output)
+	}
+	mustSpeakTael(t, output)
+}
