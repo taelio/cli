@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tael-cli
+  labels:
+    app.kubernetes.io/name: tael-cli
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tael-cli
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+    - ports:
+        - port: 8080
+          protocol: TCP
